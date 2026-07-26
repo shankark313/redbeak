@@ -399,6 +399,10 @@ LANGS = {
         "followup_system": FOLLOWUP_SYSTEM,
         "followup_user": 'குழந்தை வயசு: {age} மாசம்.\nகுழந்தை இப்போ சொன்னது: "{text}"',
         "fallback_lines": ["அப்புறம் என்ன ஆச்சு? சொல்லு!", "இன்னும் கொஞ்சம் சொல்லு!"],
+        "closing": {
+            "ta": "சூப்பரா பேசினே! இன்னைக்கு போதும், அப்புறம் பாக்கலாம்!",
+            "en": "You chatted so well! That's enough for today — see you soon!",
+        },
     },
     "hi-IN": {
         "label": "हिन्दी",
@@ -408,6 +412,10 @@ LANGS = {
         "followup_system": FOLLOWUP_SYSTEM_HI,
         "followup_user": 'बच्चे की उम्र: {age} महीने।\nबच्चे ने अभी कहा: "{text}"',
         "fallback_lines": ["फिर क्या हुआ? बताओ!", "और बताओ!"],
+        "closing": {
+            "ta": "बहुत बढ़िया बात की! आज के लिए बस, फिर मिलेंगे!",
+            "en": "You chatted so well! That's it for today — see you soon!",
+        },
     },
 }
 

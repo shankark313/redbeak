@@ -62,6 +62,8 @@ PLAN_FOOTER = (
     "speech-language pathologist can assess fully."
 )
 
+SESSION_LENGTHS = {"Short (4 turns)": 4, "Normal (6 turns)": 6, "Full (9 turns)": 9}
+
 PRACTICE_BRIDGE = {
     "tracking_well": "Keep the streak going — a play chat a day",
     "keep_watching": "The play plan works best as conversation — start "
@@ -532,6 +534,8 @@ def render_practice():
             index=voice_ids.index(current) if current in voice_ids else 0,
             key="pp_voice",
         )
+        pp_len = st.selectbox("Session length", list(SESSION_LENGTHS),
+                              index=1, key="pp_len")
     chosen = voice_ids[voice_labels.index(chosen_label)]
     if chosen != current:
         prac["voice"] = chosen
@@ -602,7 +606,8 @@ def render_practice():
         cmd = [sys.executable, "live.py", "--name", child,
                "--age", str(age), "--scenario", picked["id"],
                "--practice", "--voice", prac.get("voice", "shubh"),
-               "--session-id", sid, "--lang", lang]
+               "--session-id", sid, "--lang", lang,
+               "--max-prompts", str(SESSION_LENGTHS[pp_len])]
         feed_dir = LIVE_DIR / sid
         feed_dir.mkdir(parents=True, exist_ok=True)
         log = open(feed_dir / "stdout.log", "w")
@@ -889,6 +894,8 @@ def render_live():
             f"{s['emoji']} {s['title_en']}" for s in scenarios
         ]
         scen_pick = st.selectbox("Conversation", scen_labels, key="lv_scen")
+        len_pick = st.selectbox("Session length", list(SESSION_LENGTHS),
+                                index=1, key="lv_len")
 
     st.subheader("🔴 Live — hands-free conversation")
     c1, c2 = st.columns([1, 1])
@@ -897,7 +904,8 @@ def render_live():
         sid = f"live_{time.strftime('%Y%m%d_%H%M%S')}_{slug(name.strip())}"
         cmd = [sys.executable, "live.py", "--name", name.strip(),
                "--age", str(AGES[age_label]), "--session-id", sid,
-               "--lang", lang]
+               "--lang", lang,
+               "--max-prompts", str(SESSION_LENGTHS[len_pick])]
         idx = scen_labels.index(scen_pick)
         if idx == 0:
             cmd.append("--anchors")

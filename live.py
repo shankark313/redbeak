@@ -189,7 +189,10 @@ def main():
                      help="use the 9 screening anchors (default)")
     ap.add_argument("--voice", default="shubh", help="bulbul:v3 speaker")
     ap.add_argument("--prompts", type=int, default=0,
-                    help="limit number of prompts (0 = all)")
+                    help="limit number of anchor prompts (0 = all)")
+    ap.add_argument("--max-prompts", type=int, default=6,
+                    help="turn budget: parrot questions (prompts + "
+                         "follow-ups) before the closing line")
     ap.add_argument("--max-turn", type=float, default=25.0,
                     help="max seconds per child turn")
     ap.add_argument("--silence", type=float, default=1.8,
@@ -230,24 +233,38 @@ def main():
     feed = Feed(session_id, args.name, args.age, args.scenario or "anchors",
                 kind="practice" if args.practice else "screen")
     answers = []
+    asked = 0            # parrot questions spoken (prompts + follow-ups)
+    silent_streak = 0    # consecutive no-speech turns
+
+    def say_closing():
+        closing = pack["closing"]
+        print(f"\n🦜 {closing['ta']}")
+        print(f"   ({closing['en']})")
+        speak(closing["ta"], args.voice, args.lang)
+        feed.event("prompt", closing["ta"], closing["en"])
 
     try:
         threshold = calibrate()
         for i, p in enumerate(q_list, 1):
+            if asked >= args.max_prompts or silent_streak >= 2:
+                break
             print(f"\n🦜 [{i}/{len(q_list)}] {p['ta']}")
             print(f"   ({p['en']})")
             speak(p["ta"], args.voice, args.lang)
             feed.event("prompt", p["ta"], p["en"])
+            asked += 1
             ans = capture_answer(
                 threshold, p["ta"], p["en"], False, session_id,
                 len(answers) + 1, mode_label, args.max_turn, args.silence,
                 lang=args.lang,
             )
             if not ans:
+                silent_streak += 1
                 continue
+            silent_streak = 0
             answers.append(ans)
             feed.event("answer", ans["text"], ans.get("gloss"), ans["audio_file"])
-            if not ans["text"].strip():
+            if not ans["text"].strip() or asked >= args.max_prompts:
                 continue
             fu = voice.followup(ans["text"], args.age, lang=args.lang)
             if not fu:
@@ -258,15 +275,22 @@ def main():
             print(f"   ({fu_gloss})")
             speak(fu, args.voice, args.lang)
             feed.event("followup", fu, fu_gloss)
+            asked += 1
             ans2 = capture_answer(
                 threshold, fu, fu_gloss, True, session_id,
                 len(answers) + 1, mode_label, args.max_turn, args.silence,
                 lang=args.lang,
             )
             if ans2:
+                silent_streak = 0
                 answers.append(ans2)
                 feed.event("answer", ans2["text"], ans2.get("gloss"),
                            ans2["audio_file"])
+            else:
+                silent_streak += 1
+        # natural end — budget spent, child wandered off, or list done:
+        # always close warmly, then flow into the same finish path
+        say_closing()
     except KeyboardInterrupt:
         print("\n\n👋 ending early — analysing what we have…")
 
