@@ -209,8 +209,8 @@ def header():
         st.markdown(
             f"<h1 style='margin-bottom:0'>Redbeak</h1>"
             f"<p style='color:{ACCENT_TEXT};margin-top:0;font-size:1.05rem'>"
-            f"A friendly chat that listens to how your child talks — "
-            f"ages 2 to 6.</p>",
+            f"Catch the early signs of speech delay — years before "
+            f"they're usually noticed.</p>",
             unsafe_allow_html=True,
         )
 
