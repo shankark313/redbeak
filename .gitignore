@@ -5,3 +5,4 @@ audio_cache/
 .env
 .streamlit/
 testdata/
+testdata_sparse/

@@ -45,7 +45,7 @@ def _realign(parts, toks):
 
 
 def _marker_split(text):
-    parts = [p.strip() for p in re.split(r"[.!?;।]+", text) if p.strip()]
+    parts = [p.strip() for p in re.split(r"[.!?;।,…]+", text) if p.strip()]
     return parts or [text]
 
 
@@ -58,7 +58,11 @@ def segment(text):
     if not text:
         return [], "empty"
     toks = text.split()
-    if len(toks) <= 6:
+    # Only trivially short answers skip the ladder. Anything longer goes to
+    # the LLM — sparse speech ("சாதம்… தயிர்…") arrives as short fragments,
+    # and treating a 5-word answer as one utterance inflates MLU for exactly
+    # the children this screen needs to catch.
+    if len(toks) <= 2:
         return [text], "single"
 
     for strict, label in ((False, ""), (True, "strict_")):

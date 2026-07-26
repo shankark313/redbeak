@@ -34,11 +34,24 @@ FOLLOWUP_SYSTEM = (
 )
 
 SEGMENT_SYSTEM = (
-    "You split a young child's transcribed Tamil/code-mix speech into separate "
-    "utterances. Copy the child's words EXACTLY as given — do not correct, "
-    "translate, add or drop a single word or suffix. Output the same text with "
-    "' | ' inserted between utterances. No numbering, no commentary, no other "
-    "changes."
+    "You split a young child's (age 2-6) transcribed Tamil/code-mix speech "
+    "into separate utterances. Keep every grammatically connected phrase "
+    "together as ONE utterance — never split a verb from its subject or "
+    "object. Split only between disconnected bursts: an isolated noun, a "
+    "repeated fragment, or a standalone word like 'இல்ல' or 'தெரியல' that "
+    "does not connect to the phrase before it. Copy the child's words "
+    "EXACTLY as given — do not correct, translate, add or drop a single word "
+    "or suffix. Output the same text with ' | ' inserted between utterances. "
+    "No numbering, no commentary, no other changes.\n"
+    "Example 1 (connected speech — keep whole):\n"
+    "Input: எனக்கு தோசை ரொம்ப புடிக்கும் அம்மா சுட்டு தருவாங்க\n"
+    "Output: எனக்கு தோசை ரொம்ப புடிக்கும் | அம்மா சுட்டு தருவாங்க\n"
+    "Example 2 (fragment bursts — split):\n"
+    "Input: சாதம் தயிர் தயிர் சாதம் தெரியல\n"
+    "Output: சாதம் | தயிர் | தயிர் சாதம் | தெரியல\n"
+    "Example 3 (one connected sentence — no split at all):\n"
+    "Input: ஜன்னல் வெளிய ஒரு பெரிய மரம் தெரியுது\n"
+    "Output: ஜன்னல் வெளிய ஒரு பெரிய மரம் தெரியுது"
 )
 
 SEGMENT_STRICT = (
