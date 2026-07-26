@@ -79,6 +79,7 @@ def build_results(name, age_months, mode, answers, session_id):
         "metrics": m,
         "verdict": v,
         "breakdown": breakdown,
+        "summary": analyst.summary(m, age_months, v, breakdown),
         "analysis": analyst.analysis(m, age_months, v, breakdown),
         "cards": analyst.card(answers, m, age_months, v, breakdown, name),
         "play_plan": analyst.play_plan(m, age_months, v, breakdown),

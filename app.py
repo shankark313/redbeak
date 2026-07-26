@@ -326,6 +326,10 @@ def render_results(session):
         ]
     )
 
+    if session.get("summary"):
+        st.markdown("#### 📋 Summary")
+        st.write(session["summary"])
+
     st.markdown("#### What the numbers say")
     st.write(session["analysis"])
 
@@ -399,6 +403,7 @@ def _all_sessions():
         except Exception:
             continue
         if (d.get("child") or "").strip() and d.get("metrics"):
+            d["_file"] = str(p)  # for once-only backfills (e.g. summary)
             out.append(d)
     return out
 
@@ -1103,7 +1108,22 @@ def main():
                 st.warning("No a01..a09 audio files found there.")
 
     if pick != "—":
-        render_results(by_label[pick])
+        data = by_label[pick]
+        if not data.get("summary") and data.get("kind") != "practice":
+            # backfill once for pre-summary sessions, then it's saved
+            with st.spinner("Writing the summary…"):
+                data["summary"] = analyst.summary(
+                    data["metrics"], data["age_months"],
+                    data["verdict"], data["breakdown"],
+                )
+            fpath = data.get("_file")
+            if fpath:
+                persisted = {k: v for k, v in data.items() if k != "_file"}
+                Path(fpath).write_text(
+                    json.dumps(persisted, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+        render_results(data)
         footer()
         return
 

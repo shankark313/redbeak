@@ -117,6 +117,24 @@ ANALYSIS_SYSTEM = (
     "no markdown."
 )
 
+SUMMARY_SYSTEM = (
+    "You interpret a Tamil speech-screening result for a parent, as one "
+    "overall picture. You are given the child's age as a ready-made string, "
+    "the metrics, each metric's status (✓ within band, ⚠ below band, n/a), "
+    "and the verdict. Write 3-4 short plain-English sentences: what was "
+    "measured (a short play conversation), what the numbers mean TOGETHER — "
+    "the overall picture of sentence length and vocabulary versus typical "
+    "ranges for this age, never metric-by-metric — and what the verdict "
+    "means in plain words. HARD RULES: restate the age ONLY from the "
+    "provided age string. Never describe anything whose status is ⚠ as "
+    "typical, fine or strong. Match the register to the verdict: warm and "
+    "happy only for tracking_well; warm but honest otherwise; for "
+    "sample_too_short say plainly the chat was too short to judge. Do NOT "
+    "give advice or a next step — that is added separately. Never name a "
+    "medical condition, never diagnose, never recommend any professional. "
+    "No headings, no bullets, no markdown."
+)
+
 PLAN_SYSTEM = (
     "You design a playful 5-day (Monday–Friday) home play plan for a "
     "Tamil-speaking family, to grow a young child's talking through everyday "

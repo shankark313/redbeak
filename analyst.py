@@ -312,6 +312,59 @@ def _fallback_analysis(m, age_months, verdict_str):
     return " ".join(parts)
 
 
+# The single next step per verdict — appended in code, never left to the LLM.
+NEXT_STEP = {
+    "tracking_well": "Next step: nothing to do — keep playing, chatting and "
+    "reading together just as you are.",
+    "keep_watching": "Next step: keep chatting daily and run another relaxed "
+    "play session in a few weeks to see the trend.",
+    "worth_mentioning": "Next step: worth mentioning at your next paediatric "
+    "visit — a speech-language pathologist can take a fuller look.",
+    "sample_too_short": "Next step: try a longer, relaxed play session — "
+    "40 words or more gives a fair picture.",
+}
+
+_SUMMARY_PICTURE = {
+    "tracking_well": "sentence length and vocabulary are developing within "
+    "the typical ranges",
+    "keep_watching": "the overall picture is close to the typical ranges, "
+    "with one number sitting a little below",
+    "worth_mentioning": "sentence length is sitting below the typical range",
+    "sample_too_short": "there were too few words to compare fairly against "
+    "the typical ranges",
+}
+
+
+def _fallback_summary(m, age_months, verdict_str):
+    return (
+        "We measured a short play conversation — how long the little "
+        "sentences were and how many different words came out. "
+        f"At {age_str(age_months)}, {_SUMMARY_PICTURE[verdict_str]}. "
+        "One short chat is a snapshot, and children vary a lot day to day."
+    )
+
+
+def summary(m, age_months, verdict_str, breakdown):
+    """'📋 Summary' — the overall interpretation for a parent. Fact-locked
+    payload, tone-locked in code, deterministic next step appended."""
+    user = json.dumps(
+        _fact_payload(m, age_months, verdict_str, breakdown), ensure_ascii=False
+    )
+    text = voice.chat(prompts.SUMMARY_SYSTEM, user, max_tokens=250, temperature=0.4)
+    if not text or len(text.split()) < 15 or not tone_ok(text, verdict_str):
+        text = voice.chat(
+            prompts.SUMMARY_SYSTEM,
+            user + "\nREMINDER: metrics marked ⚠ are BELOW the typical band — "
+            "never call them typical; match the register to the verdict.",
+            max_tokens=250,
+            temperature=0.2,
+        )
+    if not text or len(text.split()) < 15 or not tone_ok(text, verdict_str):
+        text = _fallback_summary(m, age_months, verdict_str)
+    text = guard(text, verdict_str, append_paed=False)
+    return (text + " " + NEXT_STEP[verdict_str]).strip()
+
+
 def analysis(m, age_months, verdict_str, breakdown):
     """'What the numbers say' — LLM, fact-locked and tone-locked in code,
     with deterministic fallback."""
