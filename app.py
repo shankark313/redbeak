@@ -62,6 +62,16 @@ PLAN_FOOTER = (
     "speech-language pathologist can assess fully."
 )
 
+PRACTICE_BRIDGE = {
+    "tracking_well": "Keep the streak going — a play chat a day",
+    "keep_watching": "The play plan works best as conversation — start "
+    "today's chat",
+    "worth_mentioning": "The play plan works best as conversation — start "
+    "today's chat",
+    "sample_too_short": "Try a relaxed practice chat — more talk, better "
+    "picture",
+}
+
 # bulbul:v3-compatible speakers only (the v2 roster 400s on this model)
 PRACTICE_VOICES = [
     ("shubh", "Shubh — calm male (default)"),
@@ -386,6 +396,16 @@ def render_results(session):
                 unsafe_allow_html=True,
             )
         st.caption(PLAN_FOOTER)
+
+    st.caption(PRACTICE_BRIDGE.get(session["verdict"], PRACTICE_BRIDGE["keep_watching"]))
+    if st.button("🧸 Start practice", type="primary", key="goto_practice"):
+        # widget keys can't be written after instantiation — flag it and
+        # apply at the top of the next run
+        st.session_state._goto_practice = {
+            "child": session["child"],
+            "lang": session.get("language", "ta-IN"),
+        }
+        st.rerun()
 
     with st.expander("Full conversation (Tamil + English)"):
         for a in session["answers"]:
@@ -1082,6 +1102,13 @@ def main():
     header()
     warm_tts()
     ss = st.session_state
+
+    goto = ss.pop("_goto_practice", None)
+    if goto:  # applied before any widget renders
+        ss.page = "🧸 Practice"
+        ss.pp_child = goto["child"]
+        ss.ui_lang = goto["lang"]
+        ss.ui_lang_label = prompts.LANGS[goto["lang"]]["label"]
 
     with st.sidebar:
         page = st.radio(
