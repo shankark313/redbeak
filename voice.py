@@ -9,12 +9,16 @@ import hashlib
 import io
 import os
 import re
+import wave
 
 from sarvamai import SarvamAI
 
 import prompts
 
 CACHE_DIR = "audio_cache"
+PACE = 0.75
+PAUSE_MS = 400
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?।])\s+")
 TAMIL_RE = re.compile("[\\u0B80-\\u0BFF]")
 THINK_RE = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL)
 
@@ -28,26 +32,55 @@ def client():
     return _client
 
 
+def _tts_raw(text, speaker):
+    """One bulbul call -> wav bytes. Raises on failure (caller catches)."""
+    resp = client().text_to_speech.convert(
+        text=text,
+        target_language_code="ta-IN",
+        model="bulbul:v3",
+        speaker=speaker,
+        pace=PACE,
+    )
+    return base64.b64decode(resp.audios[0])
+
+
+def _concat_wavs(chunks, silence_ms=PAUSE_MS):
+    """Stitch wav chunks with silence between them (bulbul has no SSML/break
+    param, so sentence pauses are assembled client-side)."""
+    if len(chunks) == 1:
+        return chunks[0]
+    with wave.open(io.BytesIO(chunks[0]), "rb") as w0:
+        params = w0.getparams()
+    silence = b"\x00" * (
+        int(params.framerate * silence_ms / 1000)
+        * params.sampwidth
+        * params.nchannels
+    )
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setparams(params)
+        for i, chunk in enumerate(chunks):
+            with wave.open(io.BytesIO(chunk), "rb") as r:
+                w.writeframes(r.readframes(r.getnframes()))
+            if i < len(chunks) - 1:
+                w.writeframes(silence)
+    return out.getvalue()
+
+
 def tts(text, speaker="shubh"):
-    """Tamil TTS -> wav bytes, disk-cached by text (+speaker) hash. None on
-    failure. shubh keeps the legacy text-only cache key so pre-warmed
-    anchor files stay valid."""
+    """Tamil TTS -> wav bytes, disk-cached by (speaker, pace, pause, text)
+    hash. Multi-sentence lines are synthesized per sentence and stitched
+    with a breathing pause. None on failure."""
     os.makedirs(CACHE_DIR, exist_ok=True)
-    key_src = text if speaker == "shubh" else speaker + "|" + text
+    key_src = f"{speaker}|{PACE}|{PAUSE_MS}|{text}"
     key = hashlib.sha1(key_src.encode("utf-8")).hexdigest()
     path = os.path.join(CACHE_DIR, key + ".wav")
     if os.path.exists(path):
         with open(path, "rb") as f:
             return f.read()
     try:
-        resp = client().text_to_speech.convert(
-            text=text,
-            target_language_code="ta-IN",
-            model="bulbul:v3",
-            speaker=speaker,
-            pace=0.9,
-        )
-        audio = base64.b64decode(resp.audios[0])
+        sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+        audio = _concat_wavs([_tts_raw(s, speaker) for s in sentences])
         with open(path, "wb") as f:
             f.write(audio)
         return audio
