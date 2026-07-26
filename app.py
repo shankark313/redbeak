@@ -1,6 +1,10 @@
 """Redbeak — Tamil speech-milestone screening voice agent (Streamlit demo)."""
 
 import json
+import os
+import signal
+import subprocess
+import sys
 import time
 from datetime import date, timedelta
 from pathlib import Path
@@ -71,6 +75,13 @@ BUILDING_LABELS = {
     "longest": "longer phrases",
     "unique": "new words",
 }
+
+AGES = {
+    f"{y} years".replace(".5", "½"): int(y * 12)
+    for y in (2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6)
+}
+
+LIVE_DIR = SESSIONS_DIR / "live"
 
 
 # ------------------------------------------------------------------ chrome
@@ -657,6 +668,129 @@ def render_progress():
         st.markdown("**Currently building:** keep enjoying — all bands met 🎉")
 
 
+# ------------------------------------------------------------------ live page
+
+def _pid_alive(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+@st.fragment(run_every=1.0)
+def live_feed_fragment():
+    """Polls the live.py feed once a second and renders it as chat bubbles."""
+    ss = st.session_state
+    d = ss.get("live_dir")
+    if not d:
+        st.caption("No live session yet — set it up in the sidebar and press "
+                   "▶ Start.")
+        return
+    dpath = Path(d)
+    meta, events = {}, []
+    try:
+        meta = json.loads((dpath / "feed_meta.json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    try:
+        for line in (dpath / "feed.jsonl").read_text(encoding="utf-8").splitlines():
+            try:
+                events.append(json.loads(line))
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    for e in events:
+        if e["kind"] in ("prompt", "followup"):
+            tag = " 💬" if e["kind"] == "followup" else ""
+            st.markdown(f"<div class='rb-q'>🦜 {e['ta']}{tag}</div>",
+                        unsafe_allow_html=True)
+            if e.get("en"):
+                st.markdown(f"<div class='rb-qgloss'>{e['en']}</div>",
+                            unsafe_allow_html=True)
+        else:
+            if e.get("ta"):
+                st.markdown(f"<div class='rb-a'>🧒 {e['ta']}</div>",
+                            unsafe_allow_html=True)
+                if e.get("en"):
+                    st.markdown(f"<div class='rb-gloss'>{e['en']}</div>",
+                                unsafe_allow_html=True)
+            else:
+                st.caption("🧒 (no words captured)")
+            answer_player({"audio_file": e.get("audio_path")})
+
+    if meta.get("status") == "finished":
+        if meta.get("metrics"):
+            m = meta["metrics"]
+            label, fg, bg = VERDICTS.get(meta.get("verdict", ""),
+                                         VERDICTS["sample_too_short"])
+            st.markdown(
+                f"<span class='rb-pill' style='color:{fg};background:{bg};"
+                f"border:1.5px solid {fg}'>{label}</span>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"**MLU {m['mlu']:.2f}** · longest {m['longest']} · "
+                f"{m['total_words']} words ({m['unique_words']} unique) · "
+                f"{m['utterances']} utterances"
+            )
+        st.info("Session finished — open **Past sessions** on the Session "
+                "page for the full results, cards and play plan.")
+    elif not _pid_alive(ss.get("live_pid")):
+        if events:
+            st.caption("session ended")
+    else:
+        st.caption("🔴 live — listening…")
+
+
+def render_live():
+    ss = st.session_state
+    alive = _pid_alive(ss.get("live_pid"))
+
+    with st.sidebar:
+        st.markdown("### Live setup")
+        name = st.text_input("Child's name", key="lv_name")
+        age_label = st.selectbox("Age", list(AGES.keys()), index=4, key="lv_age")
+        scen_labels = ["Screening anchors (9 questions)"] + [
+            f"{s['emoji']} {s['title_en']}" for s in prompts.SCENARIOS
+        ]
+        scen_pick = st.selectbox("Conversation", scen_labels, key="lv_scen")
+
+    st.subheader("🔴 Live — hands-free conversation")
+    c1, c2 = st.columns([1, 1])
+    if c1.button("▶ Start live session", type="primary",
+                 disabled=alive or not name.strip()):
+        sid = f"live_{time.strftime('%Y%m%d_%H%M%S')}_{slug(name.strip())}"
+        cmd = [sys.executable, "live.py", "--name", name.strip(),
+               "--age", str(AGES[age_label]), "--session-id", sid]
+        idx = scen_labels.index(scen_pick)
+        if idx == 0:
+            cmd.append("--anchors")
+        else:
+            cmd += ["--scenario", prompts.SCENARIOS[idx - 1]["id"]]
+        feed_dir = LIVE_DIR / sid
+        feed_dir.mkdir(parents=True, exist_ok=True)
+        log = open(feed_dir / "stdout.log", "w")
+        proc = subprocess.Popen(
+            cmd, stdout=log, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, start_new_session=True,
+        )
+        ss.live_pid = proc.pid
+        ss.live_dir = str(feed_dir)
+        st.rerun()
+    if c2.button("■ Stop", disabled=not alive):
+        try:
+            os.kill(ss.live_pid, signal.SIGINT)  # live.py's Ctrl+C path saves
+        except Exception:
+            pass
+
+    live_feed_fragment()
+
+
 # ------------------------------------------------------------------ session flow
 
 def init_state():
@@ -678,6 +812,8 @@ def init_state():
     ss.setdefault("tts_voice", "shubh")
     ss.setdefault("pp_pick", None)
     ss.setdefault("practice_recap", None)
+    ss.setdefault("live_pid", None)
+    ss.setdefault("live_dir", None)
 
 
 def start_session(name, age_months, mode, kind="screen", q_list=None,
@@ -835,11 +971,15 @@ def main():
 
     with st.sidebar:
         page = st.radio(
-            "Page", ["🎤 Session", "🧸 Practice", "📈 Progress"],
+            "Page", ["🎤 Session", "🔴 Live", "🧸 Practice", "📈 Progress"],
             key="page", label_visibility="collapsed",
         )
         st.divider()
 
+    if page == "🔴 Live":
+        render_live()
+        footer()
+        return
     if page == "🧸 Practice":
         render_practice()
         footer()
@@ -852,15 +992,13 @@ def main():
     with st.sidebar:
         st.markdown("### Session setup")
         name = st.text_input("Child's name", value=ss.live_name or "")
-        ages = {f"{y} years".replace(".5", "½"): int(y * 12) for y in
-                (2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6)}
-        age_label = st.selectbox("Age", list(ages.keys()), index=4)
+        age_label = st.selectbox("Age", list(AGES.keys()), index=4)
         mode = st.radio("Mode", [GUIDED, CONVERSATIONAL])
 
         if ss.phase == "chat" and ss.kind == "screen":
             st.info("Session in progress…")
         elif st.button("▶️ Start session", type="primary", disabled=not name.strip()):
-            start_session(name.strip(), ages[age_label], mode)
+            start_session(name.strip(), AGES[age_label], mode)
             st.rerun()
 
         st.divider()
@@ -876,7 +1014,7 @@ def main():
         folder = st.text_input("Folder containing a01..a09 audio files")
         if st.button("Run folder → results", disabled=not (folder and name.strip())):
             with st.spinner("Transcribing and analysing…"):
-                result = run_folder(folder, name.strip(), ages[age_label])
+                result = run_folder(folder, name.strip(), AGES[age_label])
             if result:
                 ss.results = result
                 ss.phase = "results"

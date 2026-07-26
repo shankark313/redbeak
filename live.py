@@ -12,6 +12,7 @@ so it shows up in Past sessions and Progress with per-turn audio.
 
 import argparse
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -23,12 +24,47 @@ import sounddevice as sd
 
 import prompts
 import voice
-from pipeline import build_results, slug
+from pipeline import SESSIONS_DIR, build_results, slug
 
 SR = 16000
 BLOCK = 1024
 
 MODE_LABEL = "Live (hands-free)"
+
+
+class Feed:
+    """Event stream for the app's 🔴 Live page: one JSON line per event in
+    sessions/live/{session_id}/feed.jsonl plus feed_meta.json."""
+
+    def __init__(self, session_id, name, age, scenario):
+        self.dir = SESSIONS_DIR / "live" / session_id
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.jsonl = self.dir / "feed.jsonl"
+        self.meta_path = self.dir / "feed_meta.json"
+        self.jsonl.write_text("", encoding="utf-8")
+        self.meta = {"name": name, "age": age, "scenario": scenario,
+                     "status": "running"}
+        self._flush_meta()
+
+    def _flush_meta(self):
+        self.meta_path.write_text(
+            json.dumps(self.meta, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def event(self, kind, ta, en, audio_path=None):
+        line = {"kind": kind, "ta": ta, "en": en or "", "ts": time.time()}
+        if audio_path:
+            line["audio_path"] = str(audio_path)
+        with open(self.jsonl, "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+    def finish(self, verdict=None, metrics=None):
+        self.meta["status"] = "finished"
+        if verdict:
+            self.meta["verdict"] = verdict
+        if metrics:
+            self.meta["metrics"] = metrics
+        self._flush_meta()
 
 
 def status(msg, end=False):
@@ -141,6 +177,8 @@ def main():
                     help="max seconds per child turn")
     ap.add_argument("--silence", type=float, default=1.8,
                     help="seconds of silence that end a turn")
+    ap.add_argument("--session-id", default=None,
+                    help="session id (set by the app's Live page)")
     args = ap.parse_args()
 
     if args.scenario:
@@ -159,8 +197,11 @@ def main():
     if args.prompts:
         q_list = q_list[: args.prompts]
 
+    session_id = args.session_id or (
+        f"live_{time.strftime('%Y%m%d_%H%M%S')}_{slug(args.name)}"
+    )
+    feed = Feed(session_id, args.name, args.age, args.scenario or "anchors")
     threshold = calibrate()
-    session_id = f"live_{time.strftime('%Y%m%d_%H%M%S')}_{slug(args.name)}"
     answers = []
 
     try:
@@ -168,6 +209,7 @@ def main():
             print(f"\n🦜 [{i}/{len(q_list)}] {p['ta']}")
             print(f"   ({p['en']})")
             speak(p["ta"], args.voice)
+            feed.event("prompt", p["ta"], p["en"])
             ans = capture_answer(
                 threshold, p["ta"], p["en"], False, session_id,
                 len(answers) + 1, MODE_LABEL, args.max_turn, args.silence,
@@ -175,6 +217,7 @@ def main():
             if not ans:
                 continue
             answers.append(ans)
+            feed.event("answer", ans["text"], ans.get("gloss"), ans["audio_file"])
             if not ans["text"].strip():
                 continue
             fu = voice.followup(ans["text"], args.age)
@@ -184,21 +227,26 @@ def main():
             print(f"\n🦜 💬 {fu}")
             print(f"   ({fu_gloss})")
             speak(fu, args.voice)
+            feed.event("followup", fu, fu_gloss)
             ans2 = capture_answer(
                 threshold, fu, fu_gloss, True, session_id,
                 len(answers) + 1, MODE_LABEL, args.max_turn, args.silence,
             )
             if ans2:
                 answers.append(ans2)
+                feed.event("answer", ans2["text"], ans2.get("gloss"),
+                           ans2["audio_file"])
     except KeyboardInterrupt:
         print("\n\n👋 ending early — analysing what we have…")
 
     if not answers:
         print("\nno answers captured — nothing to analyse.")
+        feed.finish()
         return
 
     print("\n⏳ running the analyst…")
     session = build_results(args.name, args.age, MODE_LABEL, answers, session_id)
+    feed.finish(session["verdict"], session["metrics"])
     m = session["metrics"]
     print("\n" + "=" * 56)
     print(f"  {args.name} · {session['age_months']} months · {session['verdict']}")
