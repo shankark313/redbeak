@@ -24,7 +24,12 @@ import sounddevice as sd
 
 import prompts
 import voice
-from pipeline import SESSIONS_DIR, build_results, slug
+from pipeline import (
+    SESSIONS_DIR,
+    build_practice_results,
+    build_results,
+    slug,
+)
 
 SR = 16000
 BLOCK = 1024
@@ -58,12 +63,16 @@ class Feed:
         with open(self.jsonl, "a", encoding="utf-8") as f:
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
-    def finish(self, verdict=None, metrics=None):
+    def finish(self, verdict=None, metrics=None, kind=None, recap=None):
         self.meta["status"] = "finished"
         if verdict:
             self.meta["verdict"] = verdict
         if metrics:
             self.meta["metrics"] = metrics
+        if kind:
+            self.meta["kind"] = kind
+        if recap:
+            self.meta["recap"] = recap
         self._flush_meta()
 
 
@@ -179,6 +188,9 @@ def main():
                     help="seconds of silence that end a turn")
     ap.add_argument("--session-id", default=None,
                     help="session id (set by the app's Live page)")
+    ap.add_argument("--practice", action="store_true",
+                    help="practice semantics: recap with bands, no verdict, "
+                         "no screening language; logs to the practice file")
     args = ap.parse_args()
 
     if args.scenario:
@@ -197,9 +209,11 @@ def main():
     if args.prompts:
         q_list = q_list[: args.prompts]
 
+    prefix = "prax" if args.practice else "live"
     session_id = args.session_id or (
-        f"live_{time.strftime('%Y%m%d_%H%M%S')}_{slug(args.name)}"
+        f"{prefix}_{time.strftime('%Y%m%d_%H%M%S')}_{slug(args.name)}"
     )
+    mode_label = "Practice (hands-free)" if args.practice else MODE_LABEL
     feed = Feed(session_id, args.name, args.age, args.scenario or "anchors")
     threshold = calibrate()
     answers = []
@@ -212,7 +226,7 @@ def main():
             feed.event("prompt", p["ta"], p["en"])
             ans = capture_answer(
                 threshold, p["ta"], p["en"], False, session_id,
-                len(answers) + 1, MODE_LABEL, args.max_turn, args.silence,
+                len(answers) + 1, mode_label, args.max_turn, args.silence,
             )
             if not ans:
                 continue
@@ -230,7 +244,7 @@ def main():
             feed.event("followup", fu, fu_gloss)
             ans2 = capture_answer(
                 threshold, fu, fu_gloss, True, session_id,
-                len(answers) + 1, MODE_LABEL, args.max_turn, args.silence,
+                len(answers) + 1, mode_label, args.max_turn, args.silence,
             )
             if ans2:
                 answers.append(ans2)
@@ -245,22 +259,45 @@ def main():
         return
 
     print("\n⏳ running the analyst…")
-    session = build_results(args.name, args.age, MODE_LABEL, answers, session_id)
-    feed.finish(session["verdict"], session["metrics"])
-    m = session["metrics"]
-    print("\n" + "=" * 56)
-    print(f"  {args.name} · {session['age_months']} months · {session['verdict']}")
-    print(f"  MLU {m['mlu']:.2f} · longest {m['longest']} · "
-          f"{m['total_words']} words ({m['unique_words']} unique) · "
-          f"{m['utterances']} utterances")
-    for r in session["breakdown"]:
-        print(f"   {r['status']:>3}  {r['metric']:<28} {r['value']:>6}  "
-              f"typical {r['typical']}")
-    print("=" * 56)
-    print(f"\nsaved — open the app to see it under Past sessions "
-          f"({session['id']}).")
-    print("Screening prompt, not a diagnosis. A speech-language pathologist "
-          "assesses language fully.")
+    if args.practice:
+        session = build_practice_results(
+            args.name, args.age, answers, session_id, args.scenario or "anchors"
+        )
+        m = session["metrics"]
+        recap = {
+            "breakdown": session["breakdown"],
+            "new_words": session["new_words"],
+            "warm": session["warm"],
+            "scenario_id": session["scenario_id"],
+        }
+        feed.finish(metrics=m, kind="practice", recap=recap)
+        print("\n" + "=" * 56)
+        print(f"  PRACTICE RECAP — {args.name}")
+        for r in session["breakdown"]:
+            print(f"   {r['status']:>3}  {r['metric']:<28} {r['value']:>6}  "
+                  f"typical {r['typical']}")
+        if session["new_words"] is not None:
+            print(f"   ✨  brand-new words today: {session['new_words']}")
+        print(f"   💛  {session['warm']}")
+        print("=" * 56)
+        print("Play ideas for home — not therapy.")
+    else:
+        session = build_results(args.name, args.age, MODE_LABEL, answers, session_id)
+        feed.finish(session["verdict"], session["metrics"])
+        m = session["metrics"]
+        print("\n" + "=" * 56)
+        print(f"  {args.name} · {session['age_months']} months · {session['verdict']}")
+        print(f"  MLU {m['mlu']:.2f} · longest {m['longest']} · "
+              f"{m['total_words']} words ({m['unique_words']} unique) · "
+              f"{m['utterances']} utterances")
+        for r in session["breakdown"]:
+            print(f"   {r['status']:>3}  {r['metric']:<28} {r['value']:>6}  "
+                  f"typical {r['typical']}")
+        print("=" * 56)
+        print(f"\nsaved — open the app to see it under Past sessions "
+              f"({session['id']}).")
+        print("Screening prompt, not a diagnosis. A speech-language pathologist "
+              "assesses language fully.")
 
 
 if __name__ == "__main__":

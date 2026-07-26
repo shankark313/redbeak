@@ -19,6 +19,8 @@ from pipeline import (
     GLOSS_BY_ANCHOR,
     SESSIONS_DIR,
     build_results,
+    load_practice,
+    save_practice,
     slug,
     transcribe_answer,
 )
@@ -231,7 +233,55 @@ def metric_card(col, label, value, band=""):
     )
 
 
+def render_practice_session(session):
+    """Past-sessions view of a practice chat: bands + recap, no verdict."""
+    m = session["metrics"]
+    st.subheader(
+        f"Practice — {session['child']} · {session.get('scenario_id', '')}"
+    )
+    st.table(
+        [
+            {
+                "Metric": r["metric"],
+                "That day": str(r["value"]),
+                "Typical for age": r["typical"],
+                "Status": r["status"],
+            }
+            for r in session.get("breakdown", [])
+        ]
+    )
+    if session.get("new_words") is not None:
+        st.markdown(f"✨ **Brand-new words that day:** {session['new_words']}")
+    if session.get("warm"):
+        st.markdown(f"<div class='rb-memory'>💛 {session['warm']}</div>",
+                    unsafe_allow_html=True)
+    with st.expander("Conversation (Tamil + English)"):
+        for a in session["answers"]:
+            tag = " · follow-up" if a.get("is_followup") else ""
+            st.markdown(f"**🦜 {a['question']}**{tag}")
+            if a.get("question_gloss"):
+                st.markdown(f"<div class='rb-gloss'>{a['question_gloss']}</div>",
+                            unsafe_allow_html=True)
+            if a["text"]:
+                st.markdown(f"<div class='rb-a'>{a['text']}</div>",
+                            unsafe_allow_html=True)
+                if a.get("gloss"):
+                    st.markdown(f"<div class='rb-gloss'>{a['gloss']}</div>",
+                                unsafe_allow_html=True)
+            answer_player(a)
+    st.download_button(
+        "⬇️ Download session JSON",
+        data=json.dumps(session, ensure_ascii=False, indent=2),
+        file_name=f"redbeak_{session['id']}.json",
+        mime="application/json",
+    )
+    st.caption("Play ideas for home — not therapy.")
+
+
 def render_results(session):
+    if session.get("kind") == "practice":
+        render_practice_session(session)
+        return
     m = session["metrics"]
     band = analyst.band_for(session["age_months"])
     label, fg, bg = VERDICTS[session["verdict"]]
@@ -339,7 +389,8 @@ def render_results(session):
 # ---------------------------------------------------------- practice & progress
 
 def children_index():
-    """name -> list of saved sessions (oldest first), from disk."""
+    """name -> list of saved SCREENING sessions (oldest first), from disk.
+    Practice sessions chart as dots via the practice log, not here."""
     idx = {}
     for p in sorted(SESSIONS_DIR.glob("*.json")):
         if p.name.startswith("practice_"):
@@ -349,28 +400,9 @@ def children_index():
         except Exception:
             continue
         name = (d.get("child") or "").strip()
-        if name and d.get("metrics"):
+        if name and d.get("metrics") and d.get("kind") != "practice":
             idx.setdefault(name, []).append(d)
     return idx
-
-
-def practice_path(name):
-    return SESSIONS_DIR / f"practice_{slug(name)}.json"
-
-
-def load_practice(name):
-    try:
-        return json.loads(practice_path(name).read_text(encoding="utf-8"))
-    except Exception:
-        return {"voice": "shubh", "log": []}
-
-
-def save_practice(name, data):
-    SESSIONS_DIR.mkdir(exist_ok=True)
-    practice_path(name).write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    store.save_practice(name, data)
 
 
 def merged_sessions(name, disk_sessions):
@@ -405,101 +437,8 @@ def scenario_by_id(sid):
     return None
 
 
-def finish_practice():
-    """Same analyst metrics as Session, compact recap, no verdict."""
-    ss = st.session_state
-    utterances = []
-    with st.spinner("Counting the words…"):
-        for a in ss.answers:
-            if a["text"].strip():
-                segs, how = analyst.segment(a["text"])
-            else:
-                segs, how = [], "empty"
-            a["segments"], a["seg_method"] = segs, how
-            utterances.extend(segs)
-        m = analyst.metrics(utterances)
-
-    # brand-new words vs every previous saved session for this child
-    new_words = None
-    prev_sessions = children_index().get(ss.live_name, [])
-    if prev_sessions:
-        seen = set()
-        for s in prev_sessions:
-            for a in s.get("answers", []):
-                seen.update(w.casefold() for w in analyst.words_of(a.get("text", "")))
-        today_words = {
-            w.casefold() for u in utterances for w in analyst.words_of(u)
-        }
-        new_words = len(today_words - seen)
-
-    ss.practice_recap = {
-        "child": ss.live_name,
-        "scenario_id": ss.scenario_id,
-        "metrics": m,
-        "new_words": new_words,
-        "answers": ss.answers,
-    }
-    prac = load_practice(ss.live_name)
-    prac.setdefault("sessions", []).append(
-        {
-            "date": date.today().isoformat(),
-            "scenario_id": ss.scenario_id,
-            "mlu": m["mlu"],
-            "total_words": m["total_words"],
-            "unique_words": m["unique_words"],
-        }
-    )
-    save_practice(ss.live_name, prac)
-    ss.phase = "practice_done"
-
-
-def render_practice_recap():
-    r = st.session_state.practice_recap
-    m = r["metrics"]
-    sc = scenario_by_id(r["scenario_id"])
-    title = f"{sc['emoji']} {sc['title_en']}" if sc else "Practice"
-    st.subheader(f"{title} — nice chatting, {r['child']}!")
-
-    cols = st.columns(3)
-    metric_card(cols[0], "MLU today", f"{m['mlu']:.2f}")
-    metric_card(cols[1], "Words today", int(m["total_words"]))
-    if r["new_words"] is not None:
-        metric_card(cols[2], "Brand-new words", int(r["new_words"]),
-                    "vs earlier sessions")
-    else:
-        metric_card(cols[2], "Different words", int(m["unique_words"]))
-
-    warm = (
-        f"That was {m['total_words']} words of chatting today"
-        + (f" — including {r['new_words']} we'd never heard before!"
-           if r["new_words"] else "!")
-        + " Same time tomorrow?"
-    )
-    st.markdown(f"<div class='rb-memory'>💛 {warm}</div>", unsafe_allow_html=True)
-
-    with st.expander("Today's conversation"):
-        for a in r["answers"]:
-            tag = " · follow-up" if a.get("is_followup") else ""
-            st.markdown(f"**🦜 {a['question']}**{tag}")
-            if a.get("question_gloss"):
-                st.markdown(f"<div class='rb-gloss'>{a['question_gloss']}</div>",
-                            unsafe_allow_html=True)
-            if a["text"]:
-                st.markdown(f"<div class='rb-a'>{a['text']}</div>",
-                            unsafe_allow_html=True)
-                if a.get("gloss"):
-                    st.markdown(f"<div class='rb-gloss'>{a['gloss']}</div>",
-                                unsafe_allow_html=True)
-            answer_player(a)
-
-    if st.button("🧸 Another practice chat"):
-        st.session_state.phase = "setup"
-        st.session_state.practice_recap = None
-        st.rerun()
-    st.caption("Play ideas for home — not therapy.")
-
-
 def render_practice():
+    """Scenario picker + hands-free practice chat via the live.py engine."""
     ss = st.session_state
     idx = children_index()
     if not idx:
@@ -524,11 +463,23 @@ def render_practice():
         prac["voice"] = chosen
         save_practice(child, prac)
 
-    if ss.phase == "chat" and ss.kind == "practice":
-        render_chat()
-        return
-    if ss.phase == "practice_done" and ss.practice_recap:
-        render_practice_recap()
+    alive = _pid_alive(ss.get("live_pid"))
+    running_prax = ss.get("live_dir") and Path(ss.live_dir).name.startswith("prax_")
+
+    if running_prax:
+        st.subheader(f"Practice with {child}")
+        c1, c2 = st.columns([1, 3])
+        if c1.button("■ Stop", disabled=not alive):
+            try:
+                os.kill(ss.live_pid, signal.SIGINT)
+            except Exception:
+                pass
+        if not alive and c2.button("🧸 Choose another scenario"):
+            ss.live_dir = None
+            ss.live_pid = None
+            st.rerun()
+        live_feed_fragment()
+        st.caption("Play ideas for home — not therapy.")
         return
 
     st.subheader(f"Practice with {child}")
@@ -550,7 +501,7 @@ def render_practice():
             f"padding:0.3rem 0.9rem'>{dname}{' 🔥' if done else ''}</span>"
         )
     st.markdown(" ".join(chips), unsafe_allow_html=True)
-    st.write("Pick today's scene — a five-minute chat, all play.")
+    st.write("Pick today's scene — a five-minute hands-free chat, all play.")
 
     cols = st.columns(len(prompts.SCENARIOS))
     for col, sc in zip(cols, prompts.SCENARIOS):
@@ -569,16 +520,28 @@ def render_practice():
 
     picked = scenario_by_id(ss.pp_pick)
     if st.button(
-        "▶ Start practice chat", type="primary", disabled=picked is None,
+        "▶ Start practice chat", type="primary",
+        disabled=picked is None or alive,
     ):
         latest = idx[child][-1]
-        start_session(
-            child, latest["age_months"], CONVERSATIONAL,
-            kind="practice", q_list=list(picked["prompts"]),
-            scenario_id=picked["id"], tts_voice=prac.get("voice", "shubh"),
+        sid = f"prax_{time.strftime('%Y%m%d_%H%M%S')}_{slug(child)}"
+        cmd = [sys.executable, "live.py", "--name", child,
+               "--age", str(latest["age_months"]), "--scenario", picked["id"],
+               "--practice", "--voice", prac.get("voice", "shubh"),
+               "--session-id", sid]
+        feed_dir = LIVE_DIR / sid
+        feed_dir.mkdir(parents=True, exist_ok=True)
+        log = open(feed_dir / "stdout.log", "w")
+        subprocess_handle = subprocess.Popen(
+            cmd, stdout=log, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, start_new_session=True,
         )
+        ss.live_pid = subprocess_handle.pid
+        ss.live_dir = str(feed_dir)
         st.rerun()
     st.caption("Play ideas for home — not therapy.")
+
+
 
 
 def render_progress():
@@ -724,7 +687,27 @@ def live_feed_fragment():
             answer_player({"audio_file": e.get("audio_path")})
 
     if meta.get("status") == "finished":
-        if meta.get("metrics"):
+        if meta.get("kind") == "practice" and meta.get("recap"):
+            recap = meta["recap"]
+            st.markdown("#### 🧸 Practice recap")
+            st.table(
+                [
+                    {
+                        "Metric": r["metric"],
+                        "Today": str(r["value"]),
+                        "Typical for age": r["typical"],
+                        "Status": r["status"],
+                    }
+                    for r in recap["breakdown"]
+                ]
+            )
+            if recap.get("new_words") is not None:
+                st.markdown(f"✨ **Brand-new words today:** {recap['new_words']}")
+            st.markdown(f"<div class='rb-memory'>💛 {recap['warm']}</div>",
+                        unsafe_allow_html=True)
+            st.info("Logged — the Progress page picks this chat up as a "
+                    "practice dot.")
+        elif meta.get("metrics"):
             m = meta["metrics"]
             label, fg, bg = VERDICTS.get(meta.get("verdict", ""),
                                          VERDICTS["sample_too_short"])
@@ -738,8 +721,10 @@ def live_feed_fragment():
                 f"{m['total_words']} words ({m['unique_words']} unique) · "
                 f"{m['utterances']} utterances"
             )
-        st.info("Session finished — open **Past sessions** on the Session "
-                "page for the full results, cards and play plan.")
+            st.info("Session finished — open **Past sessions** on the Session "
+                    "page for the full results, cards and play plan.")
+        else:
+            st.info("Session finished.")
     elif not _pid_alive(ss.get("live_pid")):
         if events:
             st.caption("session ended")
@@ -841,9 +826,6 @@ def start_session(name, age_months, mode, kind="screen", q_list=None,
 
 def finish_session():
     ss = st.session_state
-    if ss.kind == "practice":
-        finish_practice()
-        return
     with st.spinner("Crunching the numbers…"):
         ss.results = build_results(
             ss.live_name, ss.live_age, ss.live_mode, ss.answers, ss.session_id

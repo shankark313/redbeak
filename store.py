@@ -113,6 +113,8 @@ def _previous_from_disk(child_name):
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
+        if data.get("kind") == "practice":
+            continue  # memory delta compares screening sessions only
         if data.get("child", "").strip().casefold() == child_name.strip().casefold():
             if best is None:  # newest first thanks to sorted(reverse=True)
                 best = data
