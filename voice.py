@@ -89,9 +89,13 @@ def tts(text, speaker="shubh"):
 
 
 def warm_anchors():
-    """Pre-generate TTS for all 9 anchor questions into the disk cache."""
+    """Pre-generate TTS for all hand-written spoken lines into the disk
+    cache: the 9 anchors plus every scenario prompt (default voice)."""
     for q in prompts.ANCHORS:
         tts(q)
+    for sc in prompts.SCENARIOS:
+        for p in sc["prompts"]:
+            tts(p["ta"])
 
 
 def stt(audio_bytes, ext="wav"):
