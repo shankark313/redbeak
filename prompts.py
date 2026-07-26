@@ -42,7 +42,8 @@ CARD_SYSTEM = (
     '"briefing" (2-3 plain-English sentences for the family about how the '
     "chat went), "
     '"lovely_moment" (1-2 sentences celebrating one specific thing the child '
-    "said, quoting their Tamil words), "
+    "said, quoting their Tamil words exactly as they appear in the "
+    "conversation — never invent a quote), "
     '"play_idea" (1-2 sentences: one concrete, fun at-home talking game '
     "matched to the child's age). "
     "Warm and specific, never clinical. Do not name any medical condition, do "
