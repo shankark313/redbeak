@@ -183,6 +183,25 @@ def transcribe_answer(audio_bytes, ext, question, mode, is_followup, session_id,
     }
 
 
+_AUDIO_MIME = {"wav": "audio/wav", "m4a": "audio/mp4", "mp3": "audio/mpeg"}
+
+
+def answer_player(a):
+    """Render an inline player for this answer's persisted audio.
+    Skips silently if the file is gone — never an API call, never an error."""
+    path = a.get("audio_file")
+    if not path:
+        return
+    p = Path(path)
+    try:
+        data = p.read_bytes() if p.exists() else None
+    except Exception:
+        data = None
+    if data:
+        ext = p.suffix.lstrip(".").lower()
+        st.audio(data, format=_AUDIO_MIME.get(ext, "audio/wav"))
+
+
 def run_folder(folder, name, age_months):
     """Non-interactive: a01..a09 audio files straight to results."""
     p = Path(folder).expanduser()
@@ -287,8 +306,10 @@ def render_results(session):
                     st.markdown(
                         f"<div class='rb-gloss'>{a['gloss']}</div>", unsafe_allow_html=True
                     )
+                answer_player(a)
                 st.caption(f"segmentation: {a.get('seg_method', '—')}")
             else:
+                answer_player(a)
                 st.caption("(no words captured)")
 
     st.download_button(
@@ -397,6 +418,10 @@ def render_chat():
         st.rerun()
 
     if ss.answers:
+        st.caption("▶️ Last answer")
+        answer_player(ss.answers[-1])
+
+    if ss.answers:
         with st.expander("So far…", expanded=False):
             for a in ss.answers:
                 tag = " 💬" if a["is_followup"] else ""
@@ -410,6 +435,7 @@ def render_chat():
                         )
                 else:
                     st.caption("(no words captured)")
+                answer_player(a)
 
     st.divider()
     if st.button("🏁 Finish early — show results", disabled=not ss.answers):
