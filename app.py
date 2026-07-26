@@ -470,10 +470,7 @@ def render_practice():
         st.subheader(f"Practice with {child}")
         c1, c2 = st.columns([1, 3])
         if c1.button("■ Stop", disabled=not alive):
-            try:
-                os.kill(ss.live_pid, signal.SIGINT)
-            except Exception:
-                pass
+            stop_live_session()
         if not alive and c2.button("🧸 Choose another scenario"):
             ss.live_dir = None
             ss.live_pid = None
@@ -538,6 +535,7 @@ def render_practice():
         )
         ss.live_pid = subprocess_handle.pid
         ss.live_dir = str(feed_dir)
+        ss.live_stop_ts = None
         st.rerun()
     st.caption("Play ideas for home — not therapy.")
 
@@ -641,6 +639,64 @@ def _pid_alive(pid):
         return True
     except Exception:
         return False
+
+
+def _fallback_finish_meta(live_dir):
+    """After a SIGTERM escalation: mark the feed finished from whatever
+    turns exist, so the UI always lands on a summary. No network calls."""
+    try:
+        dpath = Path(live_dir)
+        meta = json.loads((dpath / "feed_meta.json").read_text(encoding="utf-8"))
+        if meta.get("status") == "finished":
+            return
+        utts = []
+        for line in (dpath / "feed.jsonl").read_text(encoding="utf-8").splitlines():
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            if e.get("kind") == "answer" and e.get("ta", "").strip():
+                utts.extend(analyst._marker_split(e["ta"]))
+        m = analyst.metrics(utts)
+        age = meta.get("age", 48)
+        meta["status"] = "finished"
+        meta["metrics"] = m
+        if meta.get("kind") == "practice":
+            meta["recap"] = {
+                "breakdown": analyst.metric_breakdown(m, age),
+                "new_words": None,
+                "warm": f"That was {m['total_words']} words of chatting "
+                        "today! Same time tomorrow?",
+                "scenario_id": meta.get("scenario", ""),
+            }
+        else:
+            meta["verdict"] = analyst.verdict(m, age)
+        (dpath / "feed_meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def stop_live_session():
+    """First press: SIGINT (live.py's graceful path). Second press with the
+    pid still alive 3s later: SIGTERM + app-side fallback finish meta."""
+    ss = st.session_state
+    pid = ss.get("live_pid")
+    now = time.time()
+    first = ss.get("live_stop_ts")
+    if first and now - first >= 3 and _pid_alive(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
+        _fallback_finish_meta(ss.get("live_dir"))
+    else:
+        try:
+            os.kill(pid, signal.SIGINT)
+        except Exception:
+            pass
+    ss.live_stop_ts = now
 
 
 @st.fragment(run_every=1.0)
@@ -766,12 +822,10 @@ def render_live():
         )
         ss.live_pid = proc.pid
         ss.live_dir = str(feed_dir)
+        ss.live_stop_ts = None
         st.rerun()
     if c2.button("■ Stop", disabled=not alive):
-        try:
-            os.kill(ss.live_pid, signal.SIGINT)  # live.py's Ctrl+C path saves
-        except Exception:
-            pass
+        stop_live_session()
 
     live_feed_fragment()
 
@@ -799,6 +853,7 @@ def init_state():
     ss.setdefault("practice_recap", None)
     ss.setdefault("live_pid", None)
     ss.setdefault("live_dir", None)
+    ss.setdefault("live_stop_ts", None)
 
 
 def start_session(name, age_months, mode, kind="screen", q_list=None,

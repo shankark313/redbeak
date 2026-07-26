@@ -13,6 +13,7 @@ so it shows up in Past sessions and Progress with per-turn audio.
 import argparse
 import io
 import json
+import signal
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,7 @@ import wave
 import numpy as np
 import sounddevice as sd
 
+import analyst
 import prompts
 import voice
 from pipeline import (
@@ -41,14 +43,14 @@ class Feed:
     """Event stream for the app's 🔴 Live page: one JSON line per event in
     sessions/live/{session_id}/feed.jsonl plus feed_meta.json."""
 
-    def __init__(self, session_id, name, age, scenario):
+    def __init__(self, session_id, name, age, scenario, kind="screen"):
         self.dir = SESSIONS_DIR / "live" / session_id
         self.dir.mkdir(parents=True, exist_ok=True)
         self.jsonl = self.dir / "feed.jsonl"
         self.meta_path = self.dir / "feed_meta.json"
         self.jsonl.write_text("", encoding="utf-8")
         self.meta = {"name": name, "age": age, "scenario": scenario,
-                     "status": "running"}
+                     "kind": kind, "status": "running"}
         self._flush_meta()
 
     def _flush_meta(self):
@@ -89,7 +91,13 @@ def speak(text, speaker):
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         f.write(audio)
         path = f.name
-    subprocess.run(["afplay", path], check=False)
+    # terminatable: a SIGINT mid-speech must not leave afplay talking
+    proc = subprocess.Popen(["afplay", path])
+    try:
+        proc.wait()
+    except BaseException:
+        proc.terminate()
+        raise
 
 
 def calibrate():
@@ -214,11 +222,12 @@ def main():
         f"{prefix}_{time.strftime('%Y%m%d_%H%M%S')}_{slug(args.name)}"
     )
     mode_label = "Practice (hands-free)" if args.practice else MODE_LABEL
-    feed = Feed(session_id, args.name, args.age, args.scenario or "anchors")
-    threshold = calibrate()
+    feed = Feed(session_id, args.name, args.age, args.scenario or "anchors",
+                kind="practice" if args.practice else "screen")
     answers = []
 
     try:
+        threshold = calibrate()
         for i, p in enumerate(q_list, 1):
             print(f"\n🦜 [{i}/{len(q_list)}] {p['ta']}")
             print(f"   ({p['en']})")
@@ -253,51 +262,83 @@ def main():
     except KeyboardInterrupt:
         print("\n\n👋 ending early — analysing what we have…")
 
+    # From here the session MUST land on a finished meta: ignore further
+    # SIGINTs (a second Stop press escalates to SIGTERM app-side, and the
+    # app writes a fallback meta in that case).
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     if not answers:
         print("\nno answers captured — nothing to analyse.")
         feed.finish()
         return
 
-    print("\n⏳ running the analyst…")
+    # Phase 1 — instant summary, zero network: marker-split metrics so the
+    # app shows a result within a second of Stop.
+    quick_utts = []
+    for a in answers:
+        if a["text"].strip():
+            quick_utts.extend(analyst._marker_split(a["text"]))
+    qm = analyst.metrics(quick_utts)
     if args.practice:
-        session = build_practice_results(
-            args.name, args.age, answers, session_id, args.scenario or "anchors"
+        feed.finish(
+            metrics=qm, kind="practice",
+            recap={
+                "breakdown": analyst.metric_breakdown(qm, args.age),
+                "new_words": None,
+                "warm": f"That was {qm['total_words']} words of chatting "
+                        "today! Same time tomorrow?",
+                "scenario_id": args.scenario or "anchors",
+            },
         )
-        m = session["metrics"]
-        recap = {
-            "breakdown": session["breakdown"],
-            "new_words": session["new_words"],
-            "warm": session["warm"],
-            "scenario_id": session["scenario_id"],
-        }
-        feed.finish(metrics=m, kind="practice", recap=recap)
-        print("\n" + "=" * 56)
-        print(f"  PRACTICE RECAP — {args.name}")
-        for r in session["breakdown"]:
-            print(f"   {r['status']:>3}  {r['metric']:<28} {r['value']:>6}  "
-                  f"typical {r['typical']}")
-        if session["new_words"] is not None:
-            print(f"   ✨  brand-new words today: {session['new_words']}")
-        print(f"   💛  {session['warm']}")
-        print("=" * 56)
-        print("Play ideas for home — not therapy.")
     else:
-        session = build_results(args.name, args.age, MODE_LABEL, answers, session_id)
-        feed.finish(session["verdict"], session["metrics"])
-        m = session["metrics"]
-        print("\n" + "=" * 56)
-        print(f"  {args.name} · {session['age_months']} months · {session['verdict']}")
-        print(f"  MLU {m['mlu']:.2f} · longest {m['longest']} · "
-              f"{m['total_words']} words ({m['unique_words']} unique) · "
-              f"{m['utterances']} utterances")
-        for r in session["breakdown"]:
-            print(f"   {r['status']:>3}  {r['metric']:<28} {r['value']:>6}  "
-                  f"typical {r['typical']}")
-        print("=" * 56)
-        print(f"\nsaved — open the app to see it under Past sessions "
-              f"({session['id']}).")
-        print("Screening prompt, not a diagnosis. A speech-language pathologist "
-              "assesses language fully.")
+        feed.finish(verdict=analyst.verdict(qm, args.age), metrics=qm)
+
+    # Phase 2 — full pipeline (LLM segmentation, analysis, save); refines
+    # the already-finished meta when done. A failure here keeps phase 1.
+    print("\n⏳ running the analyst…")
+    try:
+        if args.practice:
+            session = build_practice_results(
+                args.name, args.age, answers, session_id, args.scenario or "anchors"
+            )
+            m = session["metrics"]
+            recap = {
+                "breakdown": session["breakdown"],
+                "new_words": session["new_words"],
+                "warm": session["warm"],
+                "scenario_id": session["scenario_id"],
+            }
+            feed.finish(metrics=m, kind="practice", recap=recap)
+            print("\n" + "=" * 56)
+            print(f"  PRACTICE RECAP — {args.name}")
+            for r in session["breakdown"]:
+                print(f"   {r['status']:>3}  {r['metric']:<28} {r['value']:>6}  "
+                      f"typical {r['typical']}")
+            if session["new_words"] is not None:
+                print(f"   ✨  brand-new words today: {session['new_words']}")
+            print(f"   💛  {session['warm']}")
+            print("=" * 56)
+            print("Play ideas for home — not therapy.")
+        else:
+            session = build_results(args.name, args.age, MODE_LABEL, answers, session_id)
+            feed.finish(session["verdict"], session["metrics"])
+            m = session["metrics"]
+            print("\n" + "=" * 56)
+            print(f"  {args.name} · {session['age_months']} months · {session['verdict']}")
+            print(f"  MLU {m['mlu']:.2f} · longest {m['longest']} · "
+                  f"{m['total_words']} words ({m['unique_words']} unique) · "
+                  f"{m['utterances']} utterances")
+            for r in session["breakdown"]:
+                print(f"   {r['status']:>3}  {r['metric']:<28} {r['value']:>6}  "
+                      f"typical {r['typical']}")
+            print("=" * 56)
+            print(f"\nsaved — open the app to see it under Past sessions "
+                  f"({session['id']}).")
+            print("Screening prompt, not a diagnosis. A speech-language pathologist "
+                  "assesses language fully.")
+    except Exception as e:
+        # phase-1 quick summary already marked the meta finished
+        print(f"full analysis failed ({e!r}) — quick summary stands.")
 
 
 if __name__ == "__main__":
