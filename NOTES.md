@@ -30,3 +30,6 @@ LLM-assisted: verdicts are stable across runs, point-estimates jitter ±0.5.
 (reasoning_effort=None) for follow-ups/segmentation/family text, Bulbul v3
 TTS (sentence-split + stitched pauses, pace 0.75), sarvam-translate glosses.
 Streamlit UI, Supabase records, deterministic metrics vs published age bands.
+
+Hindi added at the venue on Sarvam's suggestion — conversational Hindi
+anchors; norms carry the same English-derived caveat as Tamil.

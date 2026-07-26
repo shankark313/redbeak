@@ -83,8 +83,8 @@ def status(msg, end=False):
     sys.stdout.flush()
 
 
-def speak(text, speaker):
-    audio = voice.tts(text, speaker=speaker)
+def speak(text, speaker, lang="ta-IN"):
+    audio = voice.tts(text, speaker=speaker, lang=lang)
     if not audio:
         print("   (TTS unavailable — reading silently)")
         return
@@ -158,7 +158,7 @@ def to_wav(audio):
 
 
 def capture_answer(threshold, question, q_gloss, is_followup, session_id,
-                   seq, mode, max_s, silence_s):
+                   seq, mode, max_s, silence_s, lang="ta-IN"):
     """One listen -> transcribe -> print. Returns the answer dict or None."""
     from pipeline import transcribe_answer
 
@@ -168,7 +168,7 @@ def capture_answer(threshold, question, q_gloss, is_followup, session_id,
         return None
     ans = transcribe_answer(
         to_wav(audio), "wav", question, mode, is_followup,
-        session_id, seq, question_gloss=q_gloss,
+        session_id, seq, question_gloss=q_gloss, lang=lang,
     )
     if ans["text"]:
         print(f"   🧒 {ans['text']}")
@@ -196,24 +196,29 @@ def main():
                     help="seconds of silence that end a turn")
     ap.add_argument("--session-id", default=None,
                     help="session id (set by the app's Live page)")
+    ap.add_argument("--lang", default="ta-IN", choices=list(prompts.LANGS),
+                    help="session language pack (default ta-IN)")
     ap.add_argument("--practice", action="store_true",
                     help="practice semantics: recap with bands, no verdict, "
                          "no screening language; logs to the practice file")
     args = ap.parse_args()
 
+    pack = prompts.LANGS[args.lang]
     if args.scenario:
-        sc = next((s for s in prompts.SCENARIOS if s["id"] == args.scenario), None)
+        sc = next((s for s in pack["scenarios"] if s["id"] == args.scenario), None)
         if not sc:
-            ids = ", ".join(s["id"] for s in prompts.SCENARIOS)
+            ids = ", ".join(s["id"] for s in pack["scenarios"])
             sys.exit(f"unknown scenario '{args.scenario}' — pick from: {ids}")
         q_list = list(sc["prompts"])
-        print(f"🦜 Redbeak live — {sc['emoji']} {sc['title_en']} with {args.name}")
+        print(f"🦜 Redbeak live — {sc['emoji']} {sc['title_en']} with "
+              f"{args.name} ({pack['label']})")
     else:
         q_list = [
             {"ta": q, "en": g}
-            for q, g in zip(prompts.ANCHORS, prompts.QUESTION_GLOSSES)
+            for q, g in zip(pack["anchors"], pack["glosses"])
         ]
-        print(f"🦜 Redbeak live — screening chat with {args.name}")
+        print(f"🦜 Redbeak live — screening chat with {args.name} "
+              f"({pack['label']})")
     if args.prompts:
         q_list = q_list[: args.prompts]
 
@@ -231,11 +236,12 @@ def main():
         for i, p in enumerate(q_list, 1):
             print(f"\n🦜 [{i}/{len(q_list)}] {p['ta']}")
             print(f"   ({p['en']})")
-            speak(p["ta"], args.voice)
+            speak(p["ta"], args.voice, args.lang)
             feed.event("prompt", p["ta"], p["en"])
             ans = capture_answer(
                 threshold, p["ta"], p["en"], False, session_id,
                 len(answers) + 1, mode_label, args.max_turn, args.silence,
+                lang=args.lang,
             )
             if not ans:
                 continue
@@ -243,17 +249,19 @@ def main():
             feed.event("answer", ans["text"], ans.get("gloss"), ans["audio_file"])
             if not ans["text"].strip():
                 continue
-            fu = voice.followup(ans["text"], args.age)
+            fu = voice.followup(ans["text"], args.age, lang=args.lang)
             if not fu:
                 continue
-            fu_gloss = voice.gloss(fu) or "(asking a little more about what they said)"
+            fu_gloss = (voice.gloss(fu, lang=args.lang)
+                        or "(asking a little more about what they said)")
             print(f"\n🦜 💬 {fu}")
             print(f"   ({fu_gloss})")
-            speak(fu, args.voice)
+            speak(fu, args.voice, args.lang)
             feed.event("followup", fu, fu_gloss)
             ans2 = capture_answer(
                 threshold, fu, fu_gloss, True, session_id,
                 len(answers) + 1, mode_label, args.max_turn, args.silence,
+                lang=args.lang,
             )
             if ans2:
                 answers.append(ans2)
@@ -320,7 +328,8 @@ def main():
             print("=" * 56)
             print("Play ideas for home — not therapy.")
         else:
-            session = build_results(args.name, args.age, MODE_LABEL, answers, session_id)
+            session = build_results(args.name, args.age, MODE_LABEL, answers,
+                                session_id, lang=args.lang)
             feed.finish(session["verdict"], session["metrics"])
             m = session["metrics"]
             print("\n" + "=" * 56)

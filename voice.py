@@ -21,6 +21,10 @@ PAUSE_MS = 400
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?।])\s+")
 TAMIL_RE = re.compile("[\\u0B80-\\u0BFF]")
 THINK_RE = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL)
+SCRIPT_RE = {
+    "ta-IN": TAMIL_RE,
+    "hi-IN": re.compile("[ऀ-ॿ]"),  # Devanagari
+}
 
 _client = None
 
@@ -32,11 +36,11 @@ def client():
     return _client
 
 
-def _tts_raw(text, speaker):
+def _tts_raw(text, speaker, lang="ta-IN"):
     """One bulbul call -> wav bytes. Raises on failure (caller catches)."""
     resp = client().text_to_speech.convert(
         text=text,
-        target_language_code="ta-IN",
+        target_language_code=lang,
         model="bulbul:v3",
         speaker=speaker,
         pace=PACE,
@@ -67,12 +71,15 @@ def _concat_wavs(chunks, silence_ms=PAUSE_MS):
     return out.getvalue()
 
 
-def tts(text, speaker="shubh"):
-    """Tamil TTS -> wav bytes, disk-cached by (speaker, pace, pause, text)
-    hash. Multi-sentence lines are synthesized per sentence and stitched
-    with a breathing pause. None on failure."""
+def tts(text, speaker="shubh", lang="ta-IN"):
+    """TTS -> wav bytes, disk-cached by (speaker, pace, pause, lang, text)
+    hash (ta-IN keeps the legacy key so the warm cache stays valid).
+    Multi-sentence lines are synthesized per sentence and stitched with a
+    breathing pause. None on failure."""
     os.makedirs(CACHE_DIR, exist_ok=True)
     key_src = f"{speaker}|{PACE}|{PAUSE_MS}|{text}"
+    if lang != "ta-IN":
+        key_src += f"|{lang}"
     key = hashlib.sha1(key_src.encode("utf-8")).hexdigest()
     path = os.path.join(CACHE_DIR, key + ".wav")
     if os.path.exists(path):
@@ -80,7 +87,7 @@ def tts(text, speaker="shubh"):
             return f.read()
     try:
         sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
-        audio = _concat_wavs([_tts_raw(s, speaker) for s in sentences])
+        audio = _concat_wavs([_tts_raw(s, speaker, lang) for s in sentences])
         with open(path, "wb") as f:
             f.write(audio)
         return audio
@@ -88,20 +95,25 @@ def tts(text, speaker="shubh"):
         return None
 
 
-def warm_anchors():
-    """Pre-generate TTS for all hand-written spoken lines into the disk
-    cache: the 9 anchors plus every scenario prompt (default voice)."""
-    for q in prompts.ANCHORS:
-        tts(q)
-    for sc in prompts.SCENARIOS:
+def warm_pack(lang="ta-IN"):
+    """Pre-generate TTS for a language pack's hand-written spoken lines:
+    the 9 anchors plus every scenario prompt (default voice)."""
+    pack = prompts.LANGS[lang]
+    for q in pack["anchors"]:
+        tts(q, lang=lang)
+    for sc in pack["scenarios"]:
         for p in sc["prompts"]:
-            tts(p["ta"])
+            tts(p["ta"], lang=lang)
 
 
-def stt(audio_bytes, ext="wav"):
-    """Child audio -> transcript. codemix keeps English words in Latin script
-    with Tamil suffixes attached; language pinned to ta-IN so short utterances
-    don't drift to Telugu. Empty string on failure."""
+def warm_anchors():
+    warm_pack("ta-IN")
+
+
+def stt(audio_bytes, ext="wav", lang="ta-IN"):
+    """Child audio -> transcript. codemix keeps English words in Latin
+    script with native suffixes attached; language pinned so short child
+    utterances don't drift to a sibling language. Empty string on failure."""
     if not audio_bytes:
         return ""
     try:
@@ -111,7 +123,7 @@ def stt(audio_bytes, ext="wav"):
             file=buf,
             model="saaras:v3",
             mode="codemix",
-            language_code="ta-IN",
+            language_code=lang,
         )
         return (getattr(resp, "transcript", None) or "").strip()
     except Exception:
@@ -142,19 +154,21 @@ def chat(system, user, max_tokens=300, temperature=0.4):
         return None
 
 
-def clean(raw):
+def clean(raw, lang="ta-IN"):
     """Sanitize an LLM reply meant to be spoken to a child.
 
     Strips <think> blocks and numbered-reasoning lines, takes the last
-    plausible line, requires Tamil characters, rejects >15 words.
-    Returns None when nothing safe survives — caller falls back to script."""
+    plausible line, requires the session language's script (Tamil or
+    Devanagari), rejects >15 words. Returns None when nothing safe
+    survives — caller falls back to script."""
     if not raw:
         return None
+    script_re = SCRIPT_RE.get(lang, TAMIL_RE)
     text = strip_think(raw)
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     lines = [ln for ln in lines if not re.match(r"^(\d+[.)]|[-*•])\s", ln)]
     for line in reversed(lines):
-        if TAMIL_RE.search(line):
+        if script_re.search(line):
             line = line.strip("\"'“”‘’ ")
             if len(line.split()) > 15:
                 return None
@@ -162,29 +176,31 @@ def clean(raw):
     return None
 
 
-def followup(child_text, age_months):
-    """One short colloquial Tamil follow-up about what the child said.
-    None means: skip silently, move to the next anchor."""
+def followup(child_text, age_months, lang="ta-IN"):
+    """One short colloquial spoken-register follow-up about what the child
+    said, in the session language. None means: skip silently."""
     if not child_text or not child_text.strip():
         return None
-    user = (
-        f"குழந்தை வயசு: {age_months} மாசம்.\n"
-        f'குழந்தை இப்போ சொன்னது: "{child_text.strip()}"'
-    )
-    raw = chat(prompts.FOLLOWUP_SYSTEM, user, max_tokens=80, temperature=0.8)
-    return clean(raw)
+    pack = prompts.LANGS.get(lang, prompts.LANGS["ta-IN"])
+    user = pack["followup_user"].format(age=age_months, text=child_text.strip())
+    raw = chat(pack["followup_system"], user, max_tokens=80, temperature=0.8)
+    out = clean(raw, lang=lang)
+    # register lock: Hindi follow-ups must stay in tum register
+    if out and lang == "hi-IN" and re.search(r"आप", out):
+        return None
+    return out
 
 
-def gloss(text):
-    """Muted English gloss of a Tamil/code-mix line. 2 retries, then degrade
-    to no gloss (httpx ReadTimeout is not an ApiError — catch broadly)."""
+def gloss(text, lang="ta-IN"):
+    """Muted English gloss of a native/code-mix line. 2 retries, then
+    degrade to no gloss (httpx ReadTimeout is not an ApiError)."""
     if not text or not text.strip():
         return None
     for _ in range(2):
         try:
             resp = client().text.translate(
                 input=text,
-                source_language_code="ta-IN",
+                source_language_code=lang,
                 target_language_code="en-IN",
                 model="sarvam-translate:v1",
             )

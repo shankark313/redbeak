@@ -16,7 +16,9 @@ import voice
 
 SESSIONS_DIR = Path("sessions")
 
-GLOSS_BY_ANCHOR = dict(zip(prompts.ANCHORS, prompts.QUESTION_GLOSSES))
+GLOSS_BY_ANCHOR = {}
+for _pack in prompts.LANGS.values():
+    GLOSS_BY_ANCHOR.update(zip(_pack["anchors"], _pack["glosses"]))
 
 
 def slug(name):
@@ -24,18 +26,19 @@ def slug(name):
 
 
 def transcribe_answer(
-    audio_bytes, ext, question, mode, is_followup, session_id, seq, question_gloss=None
+    audio_bytes, ext, question, mode, is_followup, session_id, seq,
+    question_gloss=None, lang="ta-IN",
 ):
     audio_dir = SESSIONS_DIR / session_id
     audio_dir.mkdir(parents=True, exist_ok=True)
     audio_path = audio_dir / f"a{seq:02d}.{ext}"
     audio_path.write_bytes(audio_bytes)
-    text = voice.stt(audio_bytes, ext=ext)
+    text = voice.stt(audio_bytes, ext=ext, lang=lang)
     return {
         "question": question,
         "question_gloss": question_gloss or GLOSS_BY_ANCHOR.get(question),
         "text": text,
-        "gloss": voice.gloss(text) if text else None,
+        "gloss": voice.gloss(text, lang=lang) if text else None,
         "mode": mode,
         "is_followup": is_followup,
         "audio_file": str(audio_path),
@@ -54,7 +57,7 @@ def _segment_all(answers):
     return utterances
 
 
-def build_results(name, age_months, mode, answers, session_id):
+def build_results(name, age_months, mode, answers, session_id, lang="ta-IN"):
     """Segment every answer, compute metrics/verdict/analysis, save, return."""
     utterances = _segment_all(answers)
     m = analyst.metrics(utterances)
@@ -75,6 +78,7 @@ def build_results(name, age_months, mode, answers, session_id):
         "child": name,
         "age_months": age_months,
         "mode": mode,
+        "language": lang,
         "answers": answers,
         "metrics": m,
         "verdict": v,
@@ -135,7 +139,8 @@ def child_history_words(name):
     return words
 
 
-def build_practice_results(name, age_months, answers, session_id, scenario_id):
+def build_practice_results(name, age_months, answers, session_id, scenario_id,
+                           lang="ta-IN"):
     """Practice finish: same analyst metrics, NO verdict, NO screening
     language. Saves a kind:'practice' session JSON, appends the practice
     log entry, returns the session dict (with recap fields)."""
@@ -161,6 +166,7 @@ def build_practice_results(name, age_months, answers, session_id, scenario_id):
         "age_months": age_months,
         "mode": "Practice (hands-free)",
         "kind": "practice",
+        "language": lang,
         "scenario_id": scenario_id,
         "answers": answers,
         "metrics": m,

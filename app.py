@@ -175,6 +175,30 @@ def warm_tts():
     return True
 
 
+@st.cache_resource(show_spinner="Warming Hindi voices… (one-time)")
+def warm_hindi():
+    voice.warm_pack("hi-IN")
+    return True
+
+
+def lang_select():
+    """Sidebar language picker shared by Session / Live / Practice."""
+    codes = list(prompts.LANGS)
+    labels = [prompts.LANGS[c]["label"] for c in codes]
+    current = st.session_state.get("ui_lang", "ta-IN")
+    with st.sidebar:
+        pick = st.selectbox(
+            "Language", labels,
+            index=codes.index(current) if current in codes else 0,
+            key="ui_lang_label",
+        )
+    code = codes[labels.index(pick)]
+    st.session_state.ui_lang = code
+    if code == "hi-IN":
+        warm_hindi()
+    return code
+
+
 # ------------------------------------------------------------------ pipeline
 # (slug / transcribe_answer / build_results live in pipeline.py, shared
 # with the hands-free live.py CLI)
@@ -460,8 +484,8 @@ def sidebar_child_picker(idx):
         return st.selectbox("Choose a child", names, key="pp_child")
 
 
-def scenario_by_id(sid):
-    for sc in prompts.SCENARIOS:
+def scenario_by_id(sid, lang="ta-IN"):
+    for sc in prompts.LANGS[lang]["scenarios"]:
         if sc["id"] == sid:
             return sc
     return None
@@ -493,6 +517,7 @@ def render_practice():
         prac["voice"] = chosen
         save_practice(child, prac)
 
+    lang = lang_select()
     alive = _pid_alive(ss.get("live_pid"))
     running_prax = ss.get("live_dir") and Path(ss.live_dir).name.startswith("prax_")
 
@@ -530,8 +555,9 @@ def render_practice():
     st.markdown(" ".join(chips), unsafe_allow_html=True)
     st.write("Pick today's scene — a five-minute hands-free chat, all play.")
 
-    cols = st.columns(len(prompts.SCENARIOS))
-    for col, sc in zip(cols, prompts.SCENARIOS):
+    scenarios = prompts.LANGS[lang]["scenarios"]
+    cols = st.columns(len(scenarios))
+    for col, sc in zip(cols, scenarios):
         selected = ss.pp_pick == sc["id"]
         border = f"2px solid {ACCENT}" if selected else "1px solid #E4DDD3"
         col.markdown(
@@ -545,7 +571,7 @@ def render_practice():
             ss.pp_pick = sc["id"]
             st.rerun()
 
-    picked = scenario_by_id(ss.pp_pick)
+    picked = scenario_by_id(ss.pp_pick, lang)
     if st.button(
         "▶ Start practice chat", type="primary",
         disabled=picked is None or alive,
@@ -556,7 +582,7 @@ def render_practice():
         cmd = [sys.executable, "live.py", "--name", child,
                "--age", str(age), "--scenario", picked["id"],
                "--practice", "--voice", prac.get("voice", "shubh"),
-               "--session-id", sid]
+               "--session-id", sid, "--lang", lang]
         feed_dir = LIVE_DIR / sid
         feed_dir.mkdir(parents=True, exist_ok=True)
         log = open(feed_dir / "stdout.log", "w")
@@ -833,12 +859,14 @@ def render_live():
     ss = st.session_state
     alive = _pid_alive(ss.get("live_pid"))
 
+    lang = lang_select()
+    scenarios = prompts.LANGS[lang]["scenarios"]
     with st.sidebar:
         st.markdown("### Live setup")
         name = st.text_input("Child's name", key="lv_name")
         age_label = st.selectbox("Age", list(AGES.keys()), index=4, key="lv_age")
         scen_labels = ["Screening anchors (9 questions)"] + [
-            f"{s['emoji']} {s['title_en']}" for s in prompts.SCENARIOS
+            f"{s['emoji']} {s['title_en']}" for s in scenarios
         ]
         scen_pick = st.selectbox("Conversation", scen_labels, key="lv_scen")
 
@@ -848,12 +876,13 @@ def render_live():
                  disabled=alive or not name.strip()):
         sid = f"live_{time.strftime('%Y%m%d_%H%M%S')}_{slug(name.strip())}"
         cmd = [sys.executable, "live.py", "--name", name.strip(),
-               "--age", str(AGES[age_label]), "--session-id", sid]
+               "--age", str(AGES[age_label]), "--session-id", sid,
+               "--lang", lang]
         idx = scen_labels.index(scen_pick)
         if idx == 0:
             cmd.append("--anchors")
         else:
-            cmd += ["--scenario", prompts.SCENARIOS[idx - 1]["id"]]
+            cmd += ["--scenario", scenarios[idx - 1]["id"]]
         feed_dir = LIVE_DIR / sid
         feed_dir.mkdir(parents=True, exist_ok=True)
         log = open(feed_dir / "stdout.log", "w")
@@ -895,11 +924,15 @@ def init_state():
     ss.setdefault("live_pid", None)
     ss.setdefault("live_dir", None)
     ss.setdefault("live_stop_ts", None)
+    ss.setdefault("lang", "ta-IN")
+    ss.setdefault("ui_lang", "ta-IN")
 
 
 def start_session(name, age_months, mode, kind="screen", q_list=None,
-                  scenario_id=None, tts_voice="shubh"):
+                  scenario_id=None, tts_voice="shubh", lang="ta-IN"):
     ss = st.session_state
+    ss.lang = lang
+    pack = prompts.LANGS[lang]
     ss.phase = "chat"
     ss.answers = []
     ss.anchor_idx = 0
@@ -912,7 +945,7 @@ def start_session(name, age_months, mode, kind="screen", q_list=None,
     ss.kind = kind
     ss.q_list = q_list or [
         {"ta": q, "en": g}
-        for q, g in zip(prompts.ANCHORS, prompts.QUESTION_GLOSSES)
+        for q, g in zip(pack["anchors"], pack["glosses"])
     ]
     ss.scenario_id = scenario_id
     ss.tts_voice = tts_voice
@@ -924,7 +957,8 @@ def finish_session():
     ss = st.session_state
     with st.spinner("Crunching the numbers…"):
         ss.results = build_results(
-            ss.live_name, ss.live_age, ss.live_mode, ss.answers, ss.session_id
+            ss.live_name, ss.live_age, ss.live_mode, ss.answers,
+            ss.session_id, lang=ss.get("lang", "ta-IN"),
         )
     ss.phase = "results"
 
@@ -941,6 +975,7 @@ def handle_answer(audio_bytes, ext):
         ans = transcribe_answer(
             audio_bytes, ext, question, ss.live_mode, is_followup,
             ss.session_id, len(ss.answers) + 1, question_gloss=q_gloss,
+            lang=ss.get("lang", "ta-IN"),
         )
     ss.answers.append(ans)
 
@@ -949,13 +984,14 @@ def handle_answer(audio_bytes, ext):
         and ss.live_mode == CONVERSATIONAL
         and ans["text"].strip()
     ):
-        fu = voice.followup(ans["text"], ss.live_age)
+        fu = voice.followup(ans["text"], ss.live_age, lang=ss.get("lang", "ta-IN"))
         if fu:
             ss.followup_q = fu
             # spoken-line guarantee: the bubble always carries an English
             # gloss — generic placeholder if translate degrades
             ss.followup_gloss = (
-                voice.gloss(fu) or "(asking a little more about what they said)"
+                voice.gloss(fu, lang=ss.get("lang", "ta-IN"))
+                or "(asking a little more about what they said)"
             )
             ss.awaiting = "followup"
             return
@@ -982,7 +1018,7 @@ def render_chat():
 
     # SPOKEN tier: question is either a hand-written prompts.py line or a
     # follow-up that passed clean() — never raw model output
-    audio = voice.tts(question, speaker=ss.tts_voice)
+    audio = voice.tts(question, speaker=ss.tts_voice, lang=ss.get("lang", "ta-IN"))
     if audio:
         st.audio(audio, format="audio/wav")
     st.markdown(f"<div class='rb-q'>🦜 {question}</div>", unsafe_allow_html=True)
@@ -1067,6 +1103,7 @@ def main():
         footer()
         return
 
+    lang = lang_select()
     with st.sidebar:
         st.markdown("### Session setup")
         name = st.text_input("Child's name", value=ss.live_name or "")
@@ -1076,7 +1113,7 @@ def main():
         if ss.phase == "chat" and ss.kind == "screen":
             st.info("Session in progress…")
         elif st.button("▶️ Start session", type="primary", disabled=not name.strip()):
-            start_session(name.strip(), AGES[age_label], mode)
+            start_session(name.strip(), AGES[age_label], mode, lang=lang)
             st.rerun()
 
         st.divider()

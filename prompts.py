@@ -45,8 +45,8 @@ FOLLOWUP_SYSTEM = (
 )
 
 SEGMENT_SYSTEM = (
-    "You split a young child's (age 2-6) transcribed Tamil/code-mix speech "
-    "into separate utterances. Keep every grammatically connected phrase "
+    "You split a young child's (age 2-6) transcribed Tamil/Hindi code-mix "
+    "speech into separate utterances. Keep every grammatically connected phrase "
     "together as ONE utterance — never split a verb from its subject or "
     "object. Split only between disconnected bursts: an isolated noun, a "
     "repeated fragment, or a standalone word like 'இல்ல' or 'தெரியல' that "
@@ -82,7 +82,7 @@ CARD_SYSTEM = (
     '"briefing" (2-3 plain-English sentences for the family about how the '
     "chat went), "
     '"lovely_moment" (1-2 sentences celebrating one specific thing the child '
-    "said, quoting their Tamil words exactly as they appear in the "
+    "said, quoting their words exactly as they appear in the "
     "conversation — never invent a quote), "
     '"play_idea" (1-2 sentences: one concrete, fun at-home talking game '
     "matched to the child's age). "
@@ -255,6 +255,161 @@ SCENARIOS = [
         ],
     },
 ]
+
+# ---------------------------------------------------------------- Hindi pack
+# Natural SPOKEN Hindi, tum register, conversational not shuddh.
+
+ANCHORS_HI = [
+    "नमस्ते! तुम्हारा नाम क्या है?",
+    "तुम्हें कौन सा game खेलना पसंद है?",
+    "school किस किस दिन होता है? किस दिन नहीं होता?",
+    "तुम्हें कौन सा खाना सबसे अच्छा लगता है?",
+    "कौन सा खाना अच्छा नहीं लगता?",
+    "वो क्यों अच्छा नहीं लगता?",
+    "आजकल कौन सा खेल खेल रहे हो?",
+    "घर में कौन कौन रहता है?",
+    "खिड़की से बाहर क्या क्या दिखता है?",
+]
+
+QUESTION_GLOSSES_HI = list(QUESTION_GLOSSES)  # same English meanings
+
+FOLLOWUP_SYSTEM_HI = (
+    "तुम एक प्यारे बड़े हो, एक छोटे बच्चे से हिंदी में बात कर रहे हो। "
+    "बच्चे ने अभी जो कहा, उसी के बारे में बस एक छोटा सवाल पूछो।\n"
+    "नियम: दस शब्दों के अंदर। ऐसा सवाल नहीं जिसका जवाब सिर्फ़ हाँ/नहीं हो — "
+    "बच्चे को खूब बोलने दो। बच्चे के ही शब्द इस्तेमाल करो। Write EXACTLY as "
+    "spoken bolchaal Hindi — 'tumhara naam kya hai' register, कभी shuddh/"
+    "literary नहीं। हमेशा tum कहो — कभी 'आप' मत कहो, बच्चा है। "
+    "सिर्फ़ सवाल लिखो — कोई explanation या numbering नहीं।\n"
+    "Examples:\n"
+    'बच्चा: "mujhe cricket pasand hai" → cricket! किसके साथ खेलते हो?\n'
+    'बच्चा: "school mein painting ki" → painting! क्या बनाया, बताओ!\n'
+    'बच्चा: "billi ne doodh piya" → फिर billi ने क्या किया?\n'
+    'बच्चा: "mummy ke saath bazar gaya" → बाज़ार में क्या क्या खरीदा?'
+)
+
+SCENARIOS_HI = [
+    {
+        "id": "cat_story",
+        "title_ta": "बिल्ली की कहानी",
+        "title_en": "Cat story",
+        "emoji": "🐱",
+        "prompts": [
+            {"ta": "सुनो! एक छोटी बिल्ली थी। उसे अपनी लाल गेंद बहुत पसंद "
+                   "थी। एक दिन गेंद लुढ़क कर sofa के नीचे छुप गई। बिल्ली ने "
+                   "खूब ढूंढा और आखिर में ढूंढ ही ली! बस, कहानी खत्म। "
+                   "तुम्हें कहानी अच्छी लगी?",
+             "en": "Listen! There was a little cat. It loved its red ball. "
+                   "One day the ball rolled away and hid under the sofa. The "
+                   "cat searched and searched and finally found it! The end. "
+                   "Did you like the story?"},
+            {"ta": "अब तुम सुनाओ! बिल्ली वाली कहानी अपने शब्दों में सुनाओ!",
+             "en": "Now you tell it! Tell the cat story in your own words!"},
+            {"ta": "बिल्ली की गेंद कहाँ जाकर छुपी थी?",
+             "en": "Where did the cat's ball go and hide?"},
+            {"ta": "गेंद मिलने पर बिल्ली को कैसा लगा होगा? बताओ!",
+             "en": "How do you think the cat felt when it found the ball? "
+                   "Tell me!"},
+        ],
+    },
+    {
+        "id": "market_trip",
+        "title_ta": "चलो दुकान",
+        "title_en": "Market trip",
+        "emoji": "🛒",
+        "prompts": [
+            {"ta": "चलो दुकान चलते हैं! हम क्या क्या खरीदें? बताओ!",
+             "en": "Let's go to the shop! What shall we buy? Tell me!"},
+            {"ta": "इनमें से तुम्हें सबसे ज़्यादा क्या पसंद है? वो किस रंग "
+                   "का है?",
+             "en": "Which of those do you like most? What colour is it?"},
+            {"ta": "दुकान पर किस किस को साथ ले चलें? कैसे चलें?",
+             "en": "Who shall we take along to the shop? How shall we go?"},
+            {"ta": "दुकान में और क्या क्या देख सकते हैं? लंबी list बताओ!",
+             "en": "What else can we see at the shop? Give me a big list!"},
+        ],
+    },
+    {
+        "id": "zoo_day",
+        "title_ta": "चिड़ियाघर",
+        "title_en": "Zoo day",
+        "emoji": "🦁",
+        "prompts": [
+            {"ta": "आज हम चिड़ियाघर जा रहे हैं! सबसे पहले कौन सा जानवर "
+                   "देखें?",
+             "en": "We're going to the zoo today! Which animal shall we see "
+                   "first?"},
+            {"ta": "वो जानवर क्या खाता है? कैसा दिखता है?",
+             "en": "What does that animal eat? What does it look like?"},
+            {"ta": "हाथी कैसे आवाज़ करता है? शेर? आवाज़ निकाल कर बताओ!",
+             "en": "What sound does an elephant make? A lion? Make the "
+                   "sounds and tell me!"},
+            {"ta": "चिड़ियाघर में और क्या क्या देख सकते हैं? बताओ!",
+             "en": "What else can we see at the zoo? Tell me!"},
+        ],
+    },
+    {
+        "id": "cooking",
+        "title_ta": "साथ में खाना बनाएँ",
+        "title_en": "Cooking together",
+        "emoji": "🍳",
+        "prompts": [
+            {"ta": "आज हम दोनों साथ में खाना बनाते हैं! क्या बनाएँ?",
+             "en": "Today let's cook together, you and me! What shall we "
+                   "make?"},
+            {"ta": "उसके लिए क्या क्या चाहिए? बताओ!",
+             "en": "What do we need for it? Let's list them!"},
+            {"ta": "सबसे पहले क्या करना होगा? फिर क्या?",
+             "en": "What do we do first? And then what?"},
+            {"ta": "बना हुआ खाना किस किस को दें? क्यों?",
+             "en": "Who shall we give our food to? Why?"},
+        ],
+    },
+    {
+        "id": "rainy_day",
+        "title_ta": "बारिश का दिन",
+        "title_en": "Rainy day",
+        "emoji": "🌧️",
+        "prompts": [
+            {"ta": "बाहर बारिश हो रही है! खिड़की से देखो — क्या क्या दिखता "
+                   "है?",
+             "en": "It's raining outside! Look out the window — what can "
+                   "you see?"},
+            {"ta": "बारिश में भीग जाएँ तो क्या होता है? तुम्हें भीगना पसंद "
+                   "है?",
+             "en": "What happens if we get wet in the rain? Do you like "
+                   "getting wet?"},
+            {"ta": "बारिश वाले दिन घर के अंदर क्या खेल सकते हैं?",
+             "en": "What can we play indoors on a rainy day?"},
+            {"ta": "बारिश रुकने पर बाहर जाकर क्या करें?",
+             "en": "When the rain stops, what shall we do outside?"},
+        ],
+    },
+]
+
+# ------------------------------------------------------------- language packs
+# Everything per-language the engine needs. "ta" fields in scenarios/feeds
+# carry the spoken line regardless of language; glosses stay English.
+LANGS = {
+    "ta-IN": {
+        "label": "தமிழ்",
+        "anchors": ANCHORS,
+        "glosses": QUESTION_GLOSSES,
+        "scenarios": SCENARIOS,
+        "followup_system": FOLLOWUP_SYSTEM,
+        "followup_user": 'குழந்தை வயசு: {age} மாசம்.\nகுழந்தை இப்போ சொன்னது: "{text}"',
+        "fallback_lines": ["அப்புறம் என்ன ஆச்சு? சொல்லு!", "இன்னும் கொஞ்சம் சொல்லு!"],
+    },
+    "hi-IN": {
+        "label": "हिन्दी",
+        "anchors": ANCHORS_HI,
+        "glosses": QUESTION_GLOSSES_HI,
+        "scenarios": SCENARIOS_HI,
+        "followup_system": FOLLOWUP_SYSTEM_HI,
+        "followup_user": 'बच्चे की उम्र: {age} महीने।\nबच्चे ने अभी कहा: "{text}"',
+        "fallback_lines": ["फिर क्या हुआ? बताओ!", "और बताओ!"],
+    },
+}
 
 # Typical expressive-language ranges by age band (months), screening-only.
 # mlu: (low, high) words per utterance; longest: minimum longest-utterance
