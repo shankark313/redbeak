@@ -28,10 +28,13 @@ def client():
     return _client
 
 
-def tts(text):
-    """Tamil TTS -> wav bytes, disk-cached by text hash. None on failure."""
+def tts(text, speaker="shubh"):
+    """Tamil TTS -> wav bytes, disk-cached by text (+speaker) hash. None on
+    failure. shubh keeps the legacy text-only cache key so pre-warmed
+    anchor files stay valid."""
     os.makedirs(CACHE_DIR, exist_ok=True)
-    key = hashlib.sha1(text.encode("utf-8")).hexdigest()
+    key_src = text if speaker == "shubh" else speaker + "|" + text
+    key = hashlib.sha1(key_src.encode("utf-8")).hexdigest()
     path = os.path.join(CACHE_DIR, key + ".wav")
     if os.path.exists(path):
         with open(path, "rb") as f:
@@ -41,7 +44,7 @@ def tts(text):
             text=text,
             target_language_code="ta-IN",
             model="bulbul:v3",
-            speaker="shubh",
+            speaker=speaker,
             pace=0.9,
         )
         audio = base64.b64decode(resp.audios[0])

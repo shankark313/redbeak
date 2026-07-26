@@ -68,6 +68,42 @@ def insert_session(session):
         pass
 
 
+def child_sessions(child_name):
+    """All Supabase sessions for a child (oldest first). [] if unavailable —
+    the Progress view merges these with what's on disk."""
+    sb = _sb()
+    if not sb or not child_name:
+        return []
+    try:
+        res = (
+            sb.table("sessions")
+            .select("payload")
+            .eq("child_name", child_name)
+            .order("created_at")
+            .execute()
+        )
+        return [json.loads(r["payload"]) for r in res.data]
+    except Exception:
+        return []
+
+
+def save_practice(child_name, practice):
+    """Write-back the practice log/voice choice. No-op without env keys."""
+    sb = _sb()
+    if not sb or not child_name:
+        return
+    try:
+        sb.table("practice").upsert(
+            {
+                "child_name": child_name,
+                "payload": json.dumps(practice, ensure_ascii=False),
+            },
+            on_conflict="child_name",
+        ).execute()
+    except Exception:
+        pass
+
+
 def _previous_from_disk(child_name):
     if not SESSIONS_DIR.is_dir():
         return None

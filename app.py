@@ -3,6 +3,7 @@
 import json
 import re
 import time
+from datetime import date, timedelta
 from pathlib import Path
 
 import streamlit as st
@@ -52,6 +53,22 @@ PLAN_FOOTER = (
     "Play ideas for home — not therapy. If concerns persist, a "
     "speech-language pathologist can assess fully."
 )
+
+# bulbul:v3-compatible speakers only (the v2 roster 400s on this model)
+PRACTICE_VOICES = [
+    ("shubh", "Shubh — calm male (default)"),
+    ("ritu", "Ritu — warm female"),
+    ("priya", "Priya — gentle female"),
+    ("kavya", "Kavya — bright female"),
+    ("rahul", "Rahul — friendly male"),
+    ("anand", "Anand — cheerful male"),
+]
+
+BUILDING_LABELS = {
+    "mlu": "longer phrases",
+    "longest": "longer phrases",
+    "unique": "new words",
+}
 
 
 # ------------------------------------------------------------------ chrome
@@ -373,6 +390,210 @@ def render_results(session):
     )
 
 
+# ---------------------------------------------------------- practice & progress
+
+def children_index():
+    """name -> list of saved sessions (oldest first), from disk."""
+    idx = {}
+    for p in sorted(SESSIONS_DIR.glob("*.json")):
+        if p.name.startswith("practice_"):
+            continue
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        name = (d.get("child") or "").strip()
+        if name and d.get("metrics"):
+            idx.setdefault(name, []).append(d)
+    return idx
+
+
+def practice_path(name):
+    return SESSIONS_DIR / f"practice_{slug(name)}.json"
+
+
+def load_practice(name):
+    try:
+        return json.loads(practice_path(name).read_text(encoding="utf-8"))
+    except Exception:
+        return {"voice": "shubh", "log": []}
+
+
+def save_practice(name, data):
+    SESSIONS_DIR.mkdir(exist_ok=True)
+    practice_path(name).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    store.save_practice(name, data)
+
+
+def merged_sessions(name, disk_sessions):
+    """Disk sessions + any Supabase-only ones, deduped by id, oldest first."""
+    seen = {s.get("id") for s in disk_sessions}
+    extra = [s for s in store.child_sessions(name) if s.get("id") not in seen]
+    return sorted(disk_sessions + extra, key=lambda s: s.get("timestamp", ""))
+
+
+def currently_building(latest):
+    skills = []
+    for row in latest.get("breakdown", []):
+        if row["status"] != "⚠":
+            continue
+        for key, label in BUILDING_LABELS.items():
+            if key in row["metric"].lower() and label not in skills:
+                skills.append(label)
+    return skills
+
+
+def sidebar_child_picker(idx):
+    names = sorted(idx)
+    with st.sidebar:
+        st.markdown("### Child")
+        return st.selectbox("Choose a child", names, key="pp_child")
+
+
+def render_practice():
+    idx = children_index()
+    if not idx:
+        st.info("No saved sessions yet — run a session first, and the play "
+                "plan will be waiting here to practise.")
+        return
+    child = sidebar_child_picker(idx)
+    sessions = idx[child]
+    latest = sessions[-1]
+    prac = load_practice(child)
+
+    voice_ids = [v[0] for v in PRACTICE_VOICES]
+    voice_labels = [v[1] for v in PRACTICE_VOICES]
+    current = prac.get("voice", "shubh")
+    with st.sidebar:
+        chosen_label = st.selectbox(
+            "Practice voice",
+            voice_labels,
+            index=voice_ids.index(current) if current in voice_ids else 0,
+            key="pp_voice",
+        )
+    chosen = voice_ids[voice_labels.index(chosen_label)]
+    if chosen != current:
+        prac["voice"] = chosen
+        save_practice(child, prac)
+
+    plan = latest.get("play_plan") or prac.get("plan")
+    if not plan:
+        with st.spinner("Making a play plan…"):
+            plan = analyst.play_plan(
+                latest["metrics"], latest["age_months"],
+                latest["verdict"], latest["breakdown"],
+            )
+        prac["plan"] = plan
+        save_practice(child, prac)
+
+    st.subheader(f"Practice with {child}")
+    st.write(PLAN_FRAMING.get(latest["verdict"], PLAN_FRAMING["keep_watching"]))
+
+    today = date.today().isoformat()
+    for d in plan:
+        with st.container(border=True):
+            st.markdown(
+                f"**{d['day']} · {d['activity_name']}**"
+                f"<div class='say'>🗣️ {d['what_to_say_ta']}</div>"
+                f"<div class='rb-gloss'>{d['what_to_say_en']}</div>"
+                f"<div style='color:{ACCENT};font-size:0.85rem'>"
+                f"Builds: {d['builds']}</div>",
+                unsafe_allow_html=True,
+            )
+            c1, c2 = st.columns([1, 2])
+            if c1.button("▶ Play this activity", key=f"play_{d['day']}"):
+                audio = voice.tts(d["what_to_say_ta"], speaker=prac.get("voice", "shubh"))
+                if audio:
+                    st.audio(audio, format="audio/wav")
+                else:
+                    st.caption("Couldn't fetch audio just now — try again.")
+            done_today = any(
+                e["date"] == today and e["day"] == d["day"] for e in prac["log"]
+            )
+            marked = c2.checkbox(
+                "Mark as done today", value=done_today,
+                key=f"done_{slug(child)}_{d['day']}",
+            )
+            if marked != done_today:
+                if marked:
+                    prac["log"].append(
+                        {"date": today, "day": d["day"],
+                         "activity_name": d["activity_name"]}
+                    )
+                else:
+                    prac["log"] = [
+                        e for e in prac["log"]
+                        if not (e["date"] == today and e["day"] == d["day"])
+                    ]
+                save_practice(child, prac)
+    st.caption("Play ideas for home — not therapy.")
+
+
+def render_progress():
+    idx = children_index()
+    if not idx:
+        st.info("No saved sessions yet — after your first session, this page "
+                "shows how the numbers grow over time.")
+        return
+    child = sidebar_child_picker(idx)
+    sessions = merged_sessions(child, idx[child])
+    if not sessions:
+        st.info("No sessions for this child yet.")
+        return
+
+    st.subheader(f"Progress — {child}")
+    rows = [
+        {
+            "date": (s.get("timestamp") or "")[:16],
+            "MLU": s["metrics"]["mlu"],
+            "Unique words": s["metrics"]["unique_words"],
+            "verdict": s.get("verdict", ""),
+        }
+        for s in sessions
+    ]
+    import pandas as pd
+
+    dates = [r["date"] for r in rows]
+    c1, c2 = st.columns(2)
+    c1.markdown("**MLU across sessions**")
+    c1.line_chart(pd.DataFrame({"MLU": [r["MLU"] for r in rows]}, index=dates),
+                  height=220, color=ACCENT)
+    c2.markdown("**Unique words across sessions**")
+    c2.line_chart(
+        pd.DataFrame({"Unique words": [r["Unique words"] for r in rows]}, index=dates),
+        height=220, color="#5F8D5F",
+    )
+
+    pills = []
+    for r in rows:
+        label, fg, bg = VERDICTS.get(r["verdict"], VERDICTS["sample_too_short"])
+        pills.append(
+            f"<span class='rb-pill' style='color:{fg};background:{bg};"
+            f"border:1px solid {fg};font-size:0.8rem;padding:0.2rem 0.7rem'>"
+            f"{r['date']} · {label}</span>"
+        )
+    st.markdown(" ".join(pills), unsafe_allow_html=True)
+
+    prac = load_practice(child)
+    week_ago = date.today() - timedelta(days=6)
+    days = {
+        e["date"] for e in prac.get("log", [])
+        if e.get("date", "") >= week_ago.isoformat()
+    }
+    st.markdown(
+        f"<div class='rb-memory'>🔥 <b>{len(days)}</b> practice day"
+        f"{'s' if len(days) != 1 else ''} this week</div>",
+        unsafe_allow_html=True,
+    )
+    skills = currently_building(sessions[-1])
+    if skills:
+        st.markdown(f"**Currently building:** {', '.join(skills)}")
+    else:
+        st.markdown("**Currently building:** keep enjoying — all bands met 🎉")
+
+
 # ------------------------------------------------------------------ session flow
 
 def init_state():
@@ -520,6 +741,22 @@ def main():
     header()
     warm_tts()
     ss = st.session_state
+
+    with st.sidebar:
+        page = st.radio(
+            "Page", ["🎤 Session", "🧸 Practice", "📈 Progress"],
+            key="page", label_visibility="collapsed",
+        )
+        st.divider()
+
+    if page == "🧸 Practice":
+        render_practice()
+        footer()
+        return
+    if page == "📈 Progress":
+        render_progress()
+        footer()
+        return
 
     with st.sidebar:
         st.markdown("### Session setup")
