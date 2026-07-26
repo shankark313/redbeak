@@ -35,6 +35,24 @@ CONVERSATIONAL = "Conversational (adaptive)"
 
 SESSIONS_DIR = Path("sessions")
 
+GLOSS_BY_ANCHOR = dict(zip(prompts.ANCHORS, prompts.QUESTION_GLOSSES))
+
+PLAN_FRAMING = {
+    "tracking_well": "Things are tracking well — here are five little games "
+    "to keep stretching those sentences, purely for fun.",
+    "keep_watching": "Let's build this together — five little games for the "
+    "week, aimed right where they'll help most.",
+    "worth_mentioning": "Let's build this together — five little games for "
+    "the week, aimed right where they'll help most.",
+    "sample_too_short": "While you plan a longer chat, here are five little "
+    "games to get more words flowing at home.",
+}
+
+PLAN_FOOTER = (
+    "Play ideas for home — not therapy. If concerns persist, a "
+    "speech-language pathologist can assess fully."
+)
+
 
 # ------------------------------------------------------------------ chrome
 
@@ -57,7 +75,17 @@ def inject_css():
             background: #F1EBE3; padding: 0.7rem 1rem;
             border-radius: 12px; margin: 0.3rem 0;
         }}
-        .rb-gloss {{ color: #8A857E; font-size: 0.85rem; margin: 0.1rem 0 0.6rem 0.4rem; }}
+        .rb-gloss {{
+            color: #8A857E; font-style: italic; font-size: 0.95rem;
+            margin: 0.1rem 0 0.6rem 0.4rem;
+        }}
+        .rb-qgloss {{
+            color: #8A857E; font-style: italic; font-size: 1rem;
+            margin: -0.4rem 0 0.8rem 0.4rem;
+        }}
+        .rb-day b {{ font-size: 0.95rem; }}
+        .rb-day .say {{ margin: 0.4rem 0 0.1rem 0; }}
+        .rb-day .builds {{ color: {ACCENT}; font-size: 0.85rem; margin-top: 0.4rem; }}
         .rb-card {{
             background: #FFFFFF; border: 1px solid #E4DDD3;
             border-radius: 14px; padding: 1rem 1.2rem; height: 100%;
@@ -134,6 +162,7 @@ def build_results(name, age_months, mode, answers, session_id):
 
     m = analyst.metrics(utterances)
     v = analyst.verdict(m, age_months)
+    breakdown = analyst.metric_breakdown(m, age_months)
 
     prev = store.previous_session(name)  # look up BEFORE saving today's
     memory = None
@@ -152,9 +181,10 @@ def build_results(name, age_months, mode, answers, session_id):
         "answers": answers,
         "metrics": m,
         "verdict": v,
-        "breakdown": analyst.metric_breakdown(m, age_months),
-        "analysis": analyst.analysis(m, age_months, v),
-        "cards": analyst.card(answers, m, age_months, v, name),
+        "breakdown": breakdown,
+        "analysis": analyst.analysis(m, age_months, v, breakdown),
+        "cards": analyst.card(answers, m, age_months, v, breakdown, name),
+        "play_plan": analyst.play_plan(m, age_months, v, breakdown),
         "memory": memory,
     }
 
@@ -167,7 +197,9 @@ def build_results(name, age_months, mode, answers, session_id):
     return session
 
 
-def transcribe_answer(audio_bytes, ext, question, mode, is_followup, session_id, seq):
+def transcribe_answer(
+    audio_bytes, ext, question, mode, is_followup, session_id, seq, question_gloss=None
+):
     audio_dir = SESSIONS_DIR / session_id
     audio_dir.mkdir(parents=True, exist_ok=True)
     audio_path = audio_dir / f"a{seq:02d}.{ext}"
@@ -175,6 +207,7 @@ def transcribe_answer(audio_bytes, ext, question, mode, is_followup, session_id,
     text = voice.stt(audio_bytes, ext=ext)
     return {
         "question": question,
+        "question_gloss": question_gloss or GLOSS_BY_ANCHOR.get(question),
         "text": text,
         "gloss": voice.gloss(text) if text else None,
         "mode": mode,
@@ -218,7 +251,8 @@ def run_folder(folder, name, age_months):
             continue
         answers.append(
             transcribe_answer(
-                found.read_bytes(), found.suffix[1:], q, GUIDED, False, session_id, i
+                found.read_bytes(), found.suffix[1:], q, GUIDED, False,
+                session_id, i, question_gloss=prompts.QUESTION_GLOSSES[i - 1],
             )
         )
     if not answers:
@@ -252,7 +286,7 @@ def render_results(session):
         mem = session["memory"]
         st.markdown(
             f"<div class='rb-memory'>🧠 Last session MLU "
-            f"<b>{mem['prev_mlu']}</b> → today <b>{m['mlu']}</b>"
+            f"<b>{mem['prev_mlu']:.2f}</b> → today <b>{m['mlu']:.2f}</b>"
             f"<span style='color:#8A857E'> · previous session "
             f"{mem['prev_date']}</span></div>",
             unsafe_allow_html=True,
@@ -260,12 +294,12 @@ def render_results(session):
 
     lo, hi = band["mlu"]
     cols = st.columns(6)
-    metric_card(cols[0], "MLU", m["mlu"], f"typical {lo}–{hi}")
-    metric_card(cols[1], "Longest utterance", m["longest"], f"typical ≥ {band['longest']}")
-    metric_card(cols[2], "Unique words", m["unique_words"], f"typical ≥ {band['unique']}*")
-    metric_card(cols[3], "Total words", m["total_words"], "≥ 40 to screen")
-    metric_card(cols[4], "Utterances", m["utterances"], f"TTR {m['ttr']}")
-    metric_card(cols[5], "Code-mixed words", m["code_mixed"], "Tamil + English")
+    metric_card(cols[0], "MLU", f"{m['mlu']:.2f}", f"typical {lo}–{hi}")
+    metric_card(cols[1], "Longest utterance", int(m["longest"]), f"typical ≥ {band['longest']}")
+    metric_card(cols[2], "Unique words", int(m["unique_words"]), f"typical ≥ {band['unique']}*")
+    metric_card(cols[3], "Total words", int(m["total_words"]), "≥ 40 to screen")
+    metric_card(cols[4], "Utterances", int(m["utterances"]), f"TTR {m['ttr']:.2f}")
+    metric_card(cols[5], "Code-mixed words", int(m["code_mixed"]), "Tamil + English")
     st.caption("*unique-word norm applies only to samples of 150+ words")
 
     st.markdown("#### Metric breakdown")
@@ -273,7 +307,7 @@ def render_results(session):
         [
             {
                 "Metric": r["metric"],
-                "This session": r["value"],
+                "This session": str(r["value"]),
                 "Typical for age": r["typical"],
                 "Status": r["status"],
             }
@@ -296,10 +330,29 @@ def render_results(session):
             unsafe_allow_html=True,
         )
 
+    plan = session.get("play_plan")
+    if plan:
+        st.markdown("#### 🗓️ This week's play plan")
+        st.write(PLAN_FRAMING.get(session["verdict"], PLAN_FRAMING["keep_watching"]))
+        pcols = st.columns(5)
+        for col, d in zip(pcols, plan):
+            col.markdown(
+                f"<div class='rb-card rb-day'><h4>{d['day']}</h4>"
+                f"<b>{d['activity_name']}</b>"
+                f"<div class='say'>🗣️ {d['what_to_say_ta']}</div>"
+                f"<div class='rb-gloss'>{d['what_to_say_en']}</div>"
+                f"<div class='builds'>Builds: {d['builds']}</div></div>",
+                unsafe_allow_html=True,
+            )
+        st.caption(PLAN_FOOTER)
+
     with st.expander("Full conversation (Tamil + English)"):
         for a in session["answers"]:
             tag = " · follow-up" if a.get("is_followup") else ""
             st.markdown(f"**🦜 {a['question']}**{tag}")
+            q_gloss = a.get("question_gloss") or GLOSS_BY_ANCHOR.get(a["question"])
+            if q_gloss:
+                st.markdown(f"<div class='rb-gloss'>{q_gloss}</div>", unsafe_allow_html=True)
             if a["text"]:
                 st.markdown(f"<div class='rb-a'>{a['text']}</div>", unsafe_allow_html=True)
                 if a.get("gloss"):
@@ -329,6 +382,7 @@ def init_state():
     ss.setdefault("anchor_idx", 0)
     ss.setdefault("awaiting", "anchor")
     ss.setdefault("followup_q", None)
+    ss.setdefault("followup_gloss", None)
     ss.setdefault("session_id", "")
     ss.setdefault("results", None)
     ss.setdefault("live_name", "")
@@ -343,6 +397,7 @@ def start_session(name, age_months, mode):
     ss.anchor_idx = 0
     ss.awaiting = "anchor"
     ss.followup_q = None
+    ss.followup_gloss = None
     ss.live_name = name
     ss.live_age = age_months
     ss.live_mode = mode
@@ -362,10 +417,11 @@ def handle_answer(audio_bytes, ext):
     ss = st.session_state
     is_followup = ss.awaiting == "followup"
     question = ss.followup_q if is_followup else prompts.ANCHORS[ss.anchor_idx]
+    q_gloss = ss.get("followup_gloss") if is_followup else None
     with st.spinner("Listening…"):
         ans = transcribe_answer(
             audio_bytes, ext, question, ss.live_mode, is_followup,
-            ss.session_id, len(ss.answers) + 1,
+            ss.session_id, len(ss.answers) + 1, question_gloss=q_gloss,
         )
     ss.answers.append(ans)
 
@@ -377,9 +433,11 @@ def handle_answer(audio_bytes, ext):
         fu = voice.followup(ans["text"], ss.live_age)
         if fu:
             ss.followup_q = fu
+            ss.followup_gloss = voice.gloss(fu)  # same retry/degrade path
             ss.awaiting = "followup"
             return
     ss.followup_q = None
+    ss.followup_gloss = None
     ss.awaiting = "anchor"
     ss.anchor_idx += 1
     if ss.anchor_idx >= len(prompts.ANCHORS):
@@ -402,6 +460,12 @@ def render_chat():
     if audio:
         st.audio(audio, format="audio/wav")
     st.markdown(f"<div class='rb-q'>🦜 {question}</div>", unsafe_allow_html=True)
+    q_gloss = (
+        ss.get("followup_gloss") if is_followup
+        else prompts.QUESTION_GLOSSES[ss.anchor_idx]
+    )
+    if q_gloss:
+        st.markdown(f"<div class='rb-qgloss'>{q_gloss}</div>", unsafe_allow_html=True)
 
     step = f"{ss.anchor_idx}_{ss.awaiting}_{len(ss.answers)}"
     mic = st.audio_input("🎙️ Record the answer", key=f"mic_{step}")
@@ -426,6 +490,11 @@ def render_chat():
             for a in ss.answers:
                 tag = " 💬" if a["is_followup"] else ""
                 st.markdown(f"**🦜 {a['question']}**{tag}")
+                q_gloss = a.get("question_gloss") or GLOSS_BY_ANCHOR.get(a["question"])
+                if q_gloss:
+                    st.markdown(
+                        f"<div class='rb-gloss'>{q_gloss}</div>", unsafe_allow_html=True
+                    )
                 if a["text"]:
                     st.markdown(f"<div class='rb-a'>{a['text']}</div>", unsafe_allow_html=True)
                     if a.get("gloss"):

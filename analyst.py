@@ -140,7 +140,7 @@ def metric_breakdown(m, age_months):
     rows = [
         {
             "metric": "MLU (words per utterance)",
-            "value": m["mlu"],
+            "value": f"{m['mlu']:.2f}",
             "typical": f"{lo}–{hi}",
             "status": "✓" if m["mlu"] >= lo else "⚠",
         },
@@ -239,15 +239,60 @@ _VERDICT_PLAIN = {
     "words in total",
 }
 
+# Register lock: none of these may appear in analysis/briefing text unless
+# the verdict is tracking_well. One regeneration, then deterministic fallback.
+_BANNED_TONE_RE = re.compile(
+    r"typical for (?:their|this|his|her) age|\bexcellent\b|\bimpressive\b|"
+    r"\ba joy\b",
+    re.IGNORECASE,
+)
+
+
+def tone_ok(text, verdict_str):
+    if verdict_str == "tracking_well":
+        return True
+    return not _BANNED_TONE_RE.search(text or "")
+
+
+def age_str(age_months):
+    years, rem = divmod(age_months, 12)
+    if rem == 0:
+        return f"{years} years ({age_months} months)"
+    return f"{years} years {rem} months ({age_months} months)"
+
+
+def _fact_payload(m, age_months, verdict_str, breakdown):
+    band = band_for(age_months)
+    return {
+        "age": age_str(age_months),
+        "metrics": m,
+        "typical": {
+            "mlu": list(band["mlu"]),
+            "longest_min": band["longest"],
+            "unique_min_if_150_words": band["unique"],
+        },
+        "metric_statuses": [
+            {"metric": r["metric"], "status": r["status"]} for r in breakdown
+        ],
+        "verdict": verdict_str,
+    }
+
 
 def _fallback_analysis(m, age_months, verdict_str):
     band = band_for(age_months)
     lo, hi = band["mlu"]
+    if verdict_str == "sample_too_short":
+        return (
+            f"This chat captured only {m['total_words']} words, which is too "
+            "few to judge fairly — we need at least 40. At "
+            f"{age_str(age_months)}, a longer, relaxed play session will give "
+            "a much fairer picture."
+        )
     parts = [
         f"In this chat we counted {m['total_words']} words across "
         f"{m['utterances']} little utterances.",
-        f"On average each utterance was {m['mlu']} words long (typical for this "
-        f"age: {lo}–{hi}), and the longest stretch was {m['longest']} words "
+        f"On average each utterance was {m['mlu']:.2f} words long (typical "
+        f"band: {lo}–{hi}), and the longest stretch was {m['longest']} words "
         f"(typical: {band['longest']} or more).",
     ]
     if m["total_words"] >= 150:
@@ -263,24 +308,22 @@ def _fallback_analysis(m, age_months, verdict_str):
     return " ".join(parts)
 
 
-def analysis(m, age_months, verdict_str):
-    """'What the numbers say' — LLM with deterministic fallback, guarded."""
-    band = band_for(age_months)
+def analysis(m, age_months, verdict_str, breakdown):
+    """'What the numbers say' — LLM, fact-locked and tone-locked in code,
+    with deterministic fallback."""
     user = json.dumps(
-        {
-            "age_months": age_months,
-            "metrics": m,
-            "typical": {
-                "mlu": list(band["mlu"]),
-                "longest_min": band["longest"],
-                "unique_min_if_150_words": band["unique"],
-            },
-            "verdict": verdict_str,
-        },
-        ensure_ascii=False,
+        _fact_payload(m, age_months, verdict_str, breakdown), ensure_ascii=False
     )
     text = voice.chat(prompts.ANALYSIS_SYSTEM, user, max_tokens=300, temperature=0.4)
-    if not text or len(text.split()) < 15:
+    if not text or len(text.split()) < 15 or not tone_ok(text, verdict_str):
+        text = voice.chat(
+            prompts.ANALYSIS_SYSTEM,
+            user + "\nREMINDER: metrics marked ⚠ are BELOW the typical band — "
+            "never call them typical; match the register to the verdict.",
+            max_tokens=300,
+            temperature=0.2,
+        )
+    if not text or len(text.split()) < 15 or not tone_ok(text, verdict_str):
         text = _fallback_analysis(m, age_months, verdict_str)
     return guard(text, verdict_str, append_paed=True)
 
@@ -295,6 +338,21 @@ _FALLBACK_PLAY = [
 ]
 
 
+_FALLBACK_BRIEFING = {
+    "tracking_well": "The numbers sit comfortably inside the typical band — "
+    "keep chatting, singing and playing just as you are.",
+    "keep_watching": "One of the numbers sits a little below the typical "
+    "band. We'd love to hear more of their words — this week's play plan is "
+    "a lovely place to start, together.",
+    "worth_mentioning": "A couple of the numbers sit below the typical band "
+    "for this age. We'd love to hear more of their words — here's how to "
+    "help this week, one little game at a time.",
+    "sample_too_short": "Today's chat was on the short side, so the numbers "
+    "can't tell us much yet. Another, longer play session will give a much "
+    "fairer picture.",
+}
+
+
 def _fallback_card(answers, m, age_months, verdict_str):
     longest_line = ""
     for a in answers:
@@ -303,7 +361,7 @@ def _fallback_card(answers, m, age_months, verdict_str):
                 longest_line = seg
     briefing = (
         f"You had a lovely little chat — {m['total_words']} words across "
-        f"{m['utterances']} turns. " + _VERDICT_PLAIN[verdict_str].capitalize() + "."
+        f"{m['utterances']} turns. " + _FALLBACK_BRIEFING[verdict_str]
     )
     lovely = (
         f'A favourite moment: "{longest_line}" — a full {len(words_of(longest_line))}'
@@ -331,29 +389,166 @@ def _parse_json(raw):
     return data if isinstance(data, dict) else None
 
 
-def card(answers, m, age_months, verdict_str, child_name=""):
+def card(answers, m, age_months, verdict_str, breakdown, child_name=""):
     """Family briefing / lovely moment / play idea — LLM JSON with
-    deterministic fallback; every field passes through guard()."""
+    deterministic fallback; briefing register is tone-locked in code and
+    every field passes through guard()."""
     convo = [
         {"q": a.get("question", ""), "a": a.get("text", "")}
         for a in answers
         if a.get("text")
     ]
-    user = json.dumps(
-        {
-            "child_name": child_name,
-            "age_months": age_months,
-            "conversation": convo,
-            "metrics": m,
-        },
-        ensure_ascii=False,
-    )
+    payload = _fact_payload(m, age_months, verdict_str, breakdown)
+    payload["child_name"] = child_name
+    payload["conversation"] = convo
+    user = json.dumps(payload, ensure_ascii=False)
+
     data = _parse_json(voice.chat(prompts.CARD_SYSTEM, user, max_tokens=400, temperature=0.6))
+    if data and not tone_ok(str(data.get("briefing", "")), verdict_str):
+        data = _parse_json(
+            voice.chat(
+                prompts.CARD_SYSTEM,
+                user + "\nREMINDER: the verdict is not tracking_well — the "
+                "briefing must be warm but honest, never celebratory.",
+                max_tokens=400,
+                temperature=0.3,
+            )
+        )
     fb = _fallback_card(answers, m, age_months, verdict_str)
     if not data:
         data = fb
     out = {}
     for key in ("briefing", "lovely_moment", "play_idea"):
         val = str(data.get(key) or fb[key])
+        if key == "briefing" and not tone_ok(val, verdict_str):
+            val = fb["briefing"]
         out[key] = guard(val, verdict_str, append_paed=(key == "briefing"))
     return out
+
+
+# ------------------------------------------------------------ weekly play plan
+
+_PLAN_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+_PLAN_KEYS = ("day", "activity_name", "what_to_say_ta", "what_to_say_en", "builds")
+_NOT_THERAPY_RE = re.compile(r"\b(therap\w+|training|exercises?)\b", re.IGNORECASE)
+
+# Deterministic activity pools, targeted-first when a metric is below band.
+_EXPANSION_POOL = [
+    ("சொல்லு-சேர்ப்பு echo", "நீ சொன்னதை நானும் சொல்றேன் — ஒரு வார்த்தை சேர்த்து! 'பந்து'ன்னா 'சிவப்பு பந்து'!",
+     "I'll say what you said — with one word added! 'Ball' becomes 'red ball'!",
+     "Longer phrases"),
+    ("என்ன ஆச்சு கதை", "இன்னிக்கு என்ன ஆச்சு? முதல்ல என்ன, அப்புறம் என்ன, கடைசில என்ன?",
+     "What happened today? What came first, then what, and at the end?",
+     "Longer phrases"),
+    ("பாட்டு நிறுத்தம்", "பாட்டு பாடும்போது திடீர்னு நிறுத்துவேன் — அடுத்த வரி நீ சொல்லு!",
+     "I'll suddenly pause our song — you say the next line!",
+     "Longer phrases"),
+]
+_NAMING_POOL = [
+    ("சமையலறை சஃபாரி", "சமையலறைல இது என்ன? இது எதுக்கு? எந்த கலர்?",
+     "In the kitchen — what's this? What's it for? What colour?",
+     "New words"),
+    ("ஜன்னல் விளையாட்டு", "ஜன்னல்ல என்ன என்ன தெரியுது? ஒவ்வொண்ணா சொல்லு!",
+     "What can you see out the window? Name them one by one!",
+     "New words"),
+    ("கடை விளையாட்டு", "நம்ம வீட்டுக் கடைல என்ன வாங்கணும்? list சொல்லு!",
+     "What shall we buy at our pretend shop? Tell me the list!",
+     "New words"),
+]
+_MIX_POOL = [
+    ("மாத்தி மாத்தி பேசு", "முதல்ல நீ ஒண்ணு சொல்லு, அப்புறம் நான் ஒண்ணு சொல்றேன் — மாத்தி மாத்தி!",
+     "First you say one, then I say one — taking turns!",
+     "Turn-taking"),
+    ("பொம்மை phone", "பொம்மை phone-ல பாட்டிகிட்ட பேசலாமா? என்ன சொல்லுவ?",
+     "Shall we call grandma on the toy phone? What will you say?",
+     "Turn-taking"),
+    ("நான் யாரு?", "நான் ஒரு விலங்கு மாதிரி நடிக்கிறேன் — நான் யாருன்னு கேள்வி கேட்டு கண்டுபிடி!",
+     "I'll act like an animal — ask me questions and guess who I am!",
+     "Turn-taking"),
+]
+
+
+def plan_focus(breakdown):
+    """Skills below band, from the ⚠ rows — what the plan should target."""
+    focus = []
+    for row in breakdown:
+        if row["status"] != "⚠":
+            continue
+        name = row["metric"].lower()
+        if "mlu" in name or "longest" in name:
+            focus.append("longer phrases (below typical band)")
+        elif "unique" in name:
+            focus.append("new words (vocabulary below typical band)")
+    return focus
+
+
+def _fallback_plan(breakdown):
+    focus = " ".join(plan_focus(breakdown))
+    pools = []
+    if "longer phrases" in focus:
+        pools.append(_EXPANSION_POOL)
+    if "new words" in focus:
+        pools.append(_NAMING_POOL)
+    pools.append(_MIX_POOL)
+    pools.append(_EXPANSION_POOL)
+    pools.append(_NAMING_POOL)
+    seen, picked = set(), []
+    for pool in pools:
+        for item in pool:
+            if item[0] not in seen:
+                seen.add(item[0])
+                picked.append(item)
+            if len(picked) == 5:
+                break
+        if len(picked) == 5:
+            break
+    return [
+        {
+            "day": day,
+            "activity_name": name,
+            "what_to_say_ta": ta,
+            "what_to_say_en": en,
+            "builds": builds,
+        }
+        for day, (name, ta, en, builds) in zip(_PLAN_DAYS, picked)
+    ]
+
+
+def play_plan(m, age_months, verdict_str, breakdown):
+    """5-day home play plan targeted at below-band metrics. One sarvam-30b
+    call returning strict JSON; deterministic fallback if parsing fails.
+    Never therapy, never training — enforced in code too."""
+    payload = _fact_payload(m, age_months, verdict_str, breakdown)
+    payload["focus_skills"] = plan_focus(breakdown) or ["enrichment — all bands met"]
+    raw = voice.chat(
+        prompts.PLAN_SYSTEM,
+        json.dumps(payload, ensure_ascii=False),
+        max_tokens=600,
+        temperature=0.6,
+    )
+    plan = None
+    if raw:
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if match:
+            try:
+                cand = json.loads(match.group(0))
+                if (
+                    isinstance(cand, list)
+                    and len(cand) == 5
+                    and all(
+                        isinstance(d, dict)
+                        and all(str(d.get(k, "")).strip() for k in _PLAN_KEYS)
+                        for d in cand
+                    )
+                ):
+                    plan = cand
+            except Exception:
+                plan = None
+    if plan is None:
+        plan = _fallback_plan(breakdown)
+    for i, d in enumerate(plan):
+        d["day"] = _PLAN_DAYS[i]
+        for k in ("activity_name", "what_to_say_en", "builds"):
+            d[k] = _NOT_THERAPY_RE.sub("play", guard(str(d[k]), verdict_str))
+        d["what_to_say_ta"] = str(d["what_to_say_ta"]).strip()
+    return plan
