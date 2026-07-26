@@ -347,6 +347,8 @@ def render_results(session):
             unsafe_allow_html=True,
         )
 
+    # DISPLAY tier: what_to_say_ta is for the parent to read aloud — it is
+    # generated text and must never be routed to voice.tts
     plan = session.get("play_plan")
     if plan:
         st.markdown("#### 🗓️ This week's play plan")
@@ -803,7 +805,11 @@ def handle_answer(audio_bytes, ext):
         fu = voice.followup(ans["text"], ss.live_age)
         if fu:
             ss.followup_q = fu
-            ss.followup_gloss = voice.gloss(fu)  # same retry/degrade path
+            # spoken-line guarantee: the bubble always carries an English
+            # gloss — generic placeholder if translate degrades
+            ss.followup_gloss = (
+                voice.gloss(fu) or "(asking a little more about what they said)"
+            )
             ss.awaiting = "followup"
             return
     ss.followup_q = None
@@ -827,6 +833,8 @@ def render_chat():
         + (" · follow-up 💬" if is_followup else "")
     )
 
+    # SPOKEN tier: question is either a hand-written prompts.py line or a
+    # follow-up that passed clean() — never raw model output
     audio = voice.tts(question, speaker=ss.tts_voice)
     if audio:
         st.audio(audio, format="audio/wav")
