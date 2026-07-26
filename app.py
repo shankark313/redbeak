@@ -452,17 +452,117 @@ def sidebar_child_picker(idx):
         return st.selectbox("Choose a child", names, key="pp_child")
 
 
+def scenario_by_id(sid):
+    for sc in prompts.SCENARIOS:
+        if sc["id"] == sid:
+            return sc
+    return None
+
+
+def finish_practice():
+    """Same analyst metrics as Session, compact recap, no verdict."""
+    ss = st.session_state
+    utterances = []
+    with st.spinner("Counting the words…"):
+        for a in ss.answers:
+            if a["text"].strip():
+                segs, how = analyst.segment(a["text"])
+            else:
+                segs, how = [], "empty"
+            a["segments"], a["seg_method"] = segs, how
+            utterances.extend(segs)
+        m = analyst.metrics(utterances)
+
+    # brand-new words vs every previous saved session for this child
+    new_words = None
+    prev_sessions = children_index().get(ss.live_name, [])
+    if prev_sessions:
+        seen = set()
+        for s in prev_sessions:
+            for a in s.get("answers", []):
+                seen.update(w.casefold() for w in analyst.words_of(a.get("text", "")))
+        today_words = {
+            w.casefold() for u in utterances for w in analyst.words_of(u)
+        }
+        new_words = len(today_words - seen)
+
+    ss.practice_recap = {
+        "child": ss.live_name,
+        "scenario_id": ss.scenario_id,
+        "metrics": m,
+        "new_words": new_words,
+        "answers": ss.answers,
+    }
+    prac = load_practice(ss.live_name)
+    prac.setdefault("sessions", []).append(
+        {
+            "date": date.today().isoformat(),
+            "scenario_id": ss.scenario_id,
+            "mlu": m["mlu"],
+            "total_words": m["total_words"],
+            "unique_words": m["unique_words"],
+        }
+    )
+    save_practice(ss.live_name, prac)
+    ss.phase = "practice_done"
+
+
+def render_practice_recap():
+    r = st.session_state.practice_recap
+    m = r["metrics"]
+    sc = scenario_by_id(r["scenario_id"])
+    title = f"{sc['emoji']} {sc['title_en']}" if sc else "Practice"
+    st.subheader(f"{title} — nice chatting, {r['child']}!")
+
+    cols = st.columns(3)
+    metric_card(cols[0], "MLU today", f"{m['mlu']:.2f}")
+    metric_card(cols[1], "Words today", int(m["total_words"]))
+    if r["new_words"] is not None:
+        metric_card(cols[2], "Brand-new words", int(r["new_words"]),
+                    "vs earlier sessions")
+    else:
+        metric_card(cols[2], "Different words", int(m["unique_words"]))
+
+    warm = (
+        f"That was {m['total_words']} words of chatting today"
+        + (f" — including {r['new_words']} we'd never heard before!"
+           if r["new_words"] else "!")
+        + " Same time tomorrow?"
+    )
+    st.markdown(f"<div class='rb-memory'>💛 {warm}</div>", unsafe_allow_html=True)
+
+    with st.expander("Today's conversation"):
+        for a in r["answers"]:
+            tag = " · follow-up" if a.get("is_followup") else ""
+            st.markdown(f"**🦜 {a['question']}**{tag}")
+            if a.get("question_gloss"):
+                st.markdown(f"<div class='rb-gloss'>{a['question_gloss']}</div>",
+                            unsafe_allow_html=True)
+            if a["text"]:
+                st.markdown(f"<div class='rb-a'>{a['text']}</div>",
+                            unsafe_allow_html=True)
+                if a.get("gloss"):
+                    st.markdown(f"<div class='rb-gloss'>{a['gloss']}</div>",
+                                unsafe_allow_html=True)
+            answer_player(a)
+
+    if st.button("🧸 Another practice chat"):
+        st.session_state.phase = "setup"
+        st.session_state.practice_recap = None
+        st.rerun()
+    st.caption("Play ideas for home — not therapy.")
+
+
 def render_practice():
+    ss = st.session_state
     idx = children_index()
     if not idx:
-        st.info("No saved sessions yet — run a session first, and the play "
-                "plan will be waiting here to practise.")
+        st.info("No saved sessions yet — run a Session first, then practise "
+                "here with themed chats.")
         return
-    child = sidebar_child_picker(idx)
-    sessions = idx[child]
-    latest = sessions[-1]
-    prac = load_practice(child)
 
+    child = sidebar_child_picker(idx)
+    prac = load_practice(child)
     voice_ids = [v[0] for v in PRACTICE_VOICES]
     voice_labels = [v[1] for v in PRACTICE_VOICES]
     current = prac.get("voice", "shubh")
@@ -478,56 +578,60 @@ def render_practice():
         prac["voice"] = chosen
         save_practice(child, prac)
 
-    plan = latest.get("play_plan") or prac.get("plan")
-    if not plan:
-        with st.spinner("Making a play plan…"):
-            plan = analyst.play_plan(
-                latest["metrics"], latest["age_months"],
-                latest["verdict"], latest["breakdown"],
-            )
-        prac["plan"] = plan
-        save_practice(child, prac)
+    if ss.phase == "chat" and ss.kind == "practice":
+        render_chat()
+        return
+    if ss.phase == "practice_done" and ss.practice_recap:
+        render_practice_recap()
+        return
 
     st.subheader(f"Practice with {child}")
-    st.write(PLAN_FRAMING.get(latest["verdict"], PLAN_FRAMING["keep_watching"]))
 
-    today = date.today().isoformat()
-    for d in plan:
-        with st.container(border=True):
-            st.markdown(
-                f"**{d['day']} · {d['activity_name']}**"
-                f"<div class='say'>🗣️ {d['what_to_say_ta']}</div>"
-                f"<div class='rb-gloss'>{d['what_to_say_en']}</div>"
-                f"<div style='color:{ACCENT};font-size:0.85rem'>"
-                f"Builds: {d['builds']}</div>",
-                unsafe_allow_html=True,
-            )
-            c1, c2 = st.columns([1, 2])
-            if c1.button("▶ Play this activity", key=f"play_{d['day']}"):
-                audio = voice.tts(d["what_to_say_ta"], speaker=prac.get("voice", "shubh"))
-                if audio:
-                    st.audio(audio, format="audio/wav")
-                else:
-                    st.caption("Couldn't fetch audio just now — try again.")
-            done_today = any(
-                e["date"] == today and e["day"] == d["day"] for e in prac["log"]
-            )
-            marked = c2.checkbox(
-                "Mark as done today", value=done_today,
-                key=f"done_{slug(child)}_{d['day']}",
-            )
-            if marked != done_today:
-                if marked:
-                    prac["log"].append(
-                        {"date": today, "day": d["day"],
-                         "activity_name": d["activity_name"]}
-                    )
-                else:
-                    prac["log"] = [
-                        e for e in prac["log"]
-                        if not (e["date"] == today and e["day"] == d["day"])
-                    ]
-                save_practice(child, prac)
+    # Mon–Fri day strip, today highlighted; practised days get a flame
+    prac_dates = {e.get("date") for e in prac.get("sessions", [])}
+    monday = date.today() - timedelta(days=date.today().weekday())
+    chips = []
+    for i, dname in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri")):
+        d = monday + timedelta(days=i)
+        is_today = d == date.today()
+        done = d.isoformat() in prac_dates
+        style = (
+            f"background:{ACCENT};color:#fff;" if is_today
+            else "background:#EFEBE4;color:#8A857E;"
+        )
+        chips.append(
+            f"<span class='rb-pill' style='{style}font-size:0.85rem;"
+            f"padding:0.3rem 0.9rem'>{dname}{' 🔥' if done else ''}</span>"
+        )
+    st.markdown(" ".join(chips), unsafe_allow_html=True)
+    st.write("Pick today's scene — a five-minute chat, all play.")
+
+    cols = st.columns(len(prompts.SCENARIOS))
+    for col, sc in zip(cols, prompts.SCENARIOS):
+        selected = ss.pp_pick == sc["id"]
+        border = f"2px solid {ACCENT}" if selected else "1px solid #E4DDD3"
+        col.markdown(
+            f"<div class='rb-card' style='text-align:center;border:{border}'>"
+            f"<div style='font-size:2rem'>{sc['emoji']}</div>"
+            f"<b>{sc['title_ta']}</b>"
+            f"<div class='rb-gloss' style='margin:0'>{sc['title_en']}</div></div>",
+            unsafe_allow_html=True,
+        )
+        if col.button("Choose", key=f"pick_{sc['id']}", width="stretch"):
+            ss.pp_pick = sc["id"]
+            st.rerun()
+
+    picked = scenario_by_id(ss.pp_pick)
+    if st.button(
+        "▶ Start practice chat", type="primary", disabled=picked is None,
+    ):
+        latest = idx[child][-1]
+        start_session(
+            child, latest["age_months"], CONVERSATIONAL,
+            kind="practice", q_list=list(picked["prompts"]),
+            scenario_id=picked["id"], tts_voice=prac.get("voice", "shubh"),
+        )
+        st.rerun()
     st.caption("Play ideas for home — not therapy.")
 
 
@@ -553,18 +657,42 @@ def render_progress():
         }
         for s in sessions
     ]
+    import altair as alt
     import pandas as pd
 
-    dates = [r["date"] for r in rows]
+    prac = load_practice(child)
+    prac_rows = [
+        {"date": e["date"], "MLU": e["mlu"]}
+        for e in prac.get("sessions", [])
+        if e.get("mlu") is not None
+    ]
+
+    df_s = pd.DataFrame(rows)
     c1, c2 = st.columns(2)
-    c1.markdown("**MLU across sessions**")
-    c1.line_chart(pd.DataFrame({"MLU": [r["MLU"] for r in rows]}, index=dates),
-                  height=220, color=ACCENT)
-    c2.markdown("**Unique words across sessions**")
-    c2.line_chart(
-        pd.DataFrame({"Unique words": [r["Unique words"] for r in rows]}, index=dates),
-        height=220, color="#5F8D5F",
+    c1.markdown("**MLU across sessions** · ○ practice chats")
+    mlu_line = (
+        alt.Chart(df_s)
+        .mark_line(point=True, color=ACCENT, strokeWidth=2.5)
+        .encode(x=alt.X("date:N", title=None), y=alt.Y("MLU:Q", title="MLU"))
     )
+    layers = mlu_line
+    if prac_rows:
+        dots = (
+            alt.Chart(pd.DataFrame(prac_rows))
+            .mark_circle(color="#CBBFB1", size=110, opacity=0.8)
+            .encode(x="date:N", y="MLU:Q")
+        )
+        layers = mlu_line + dots
+    c1.altair_chart(layers.properties(height=220), width="stretch")
+
+    c2.markdown("**Unique words across sessions**")
+    uniq_line = (
+        alt.Chart(df_s)
+        .mark_line(point=True, color="#5F8D5F", strokeWidth=2.5)
+        .encode(x=alt.X("date:N", title=None),
+                y=alt.Y("Unique words:Q", title="unique words"))
+    )
+    c2.altair_chart(uniq_line.properties(height=220), width="stretch")
 
     pills = []
     for r in rows:
@@ -576,10 +704,10 @@ def render_progress():
         )
     st.markdown(" ".join(pills), unsafe_allow_html=True)
 
-    prac = load_practice(child)
     week_ago = date.today() - timedelta(days=6)
     days = {
-        e["date"] for e in prac.get("log", [])
+        e["date"]
+        for e in prac.get("log", []) + prac.get("sessions", [])
         if e.get("date", "") >= week_ago.isoformat()
     }
     st.markdown(
@@ -609,9 +737,16 @@ def init_state():
     ss.setdefault("live_name", "")
     ss.setdefault("live_age", 48)
     ss.setdefault("live_mode", GUIDED)
+    ss.setdefault("kind", "screen")
+    ss.setdefault("q_list", None)
+    ss.setdefault("scenario_id", None)
+    ss.setdefault("tts_voice", "shubh")
+    ss.setdefault("pp_pick", None)
+    ss.setdefault("practice_recap", None)
 
 
-def start_session(name, age_months, mode):
+def start_session(name, age_months, mode, kind="screen", q_list=None,
+                  scenario_id=None, tts_voice="shubh"):
     ss = st.session_state
     ss.phase = "chat"
     ss.answers = []
@@ -622,11 +757,22 @@ def start_session(name, age_months, mode):
     ss.live_name = name
     ss.live_age = age_months
     ss.live_mode = mode
-    ss.session_id = time.strftime("%Y%m%d_%H%M%S") + "_" + slug(name)
+    ss.kind = kind
+    ss.q_list = q_list or [
+        {"ta": q, "en": g}
+        for q, g in zip(prompts.ANCHORS, prompts.QUESTION_GLOSSES)
+    ]
+    ss.scenario_id = scenario_id
+    ss.tts_voice = tts_voice
+    prefix = "prax" if kind == "practice" else "scr"
+    ss.session_id = f"{prefix}_{time.strftime('%Y%m%d_%H%M%S')}_{slug(name)}"
 
 
 def finish_session():
     ss = st.session_state
+    if ss.kind == "practice":
+        finish_practice()
+        return
     with st.spinner("Crunching the numbers…"):
         ss.results = build_results(
             ss.live_name, ss.live_age, ss.live_mode, ss.answers, ss.session_id
@@ -637,8 +783,11 @@ def finish_session():
 def handle_answer(audio_bytes, ext):
     ss = st.session_state
     is_followup = ss.awaiting == "followup"
-    question = ss.followup_q if is_followup else prompts.ANCHORS[ss.anchor_idx]
-    q_gloss = ss.get("followup_gloss") if is_followup else None
+    if is_followup:
+        question, q_gloss = ss.followup_q, ss.get("followup_gloss")
+    else:
+        entry = ss.q_list[ss.anchor_idx]
+        question, q_gloss = entry["ta"], entry["en"]
     with st.spinner("Listening…"):
         ans = transcribe_answer(
             audio_bytes, ext, question, ss.live_mode, is_followup,
@@ -661,29 +810,30 @@ def handle_answer(audio_bytes, ext):
     ss.followup_gloss = None
     ss.awaiting = "anchor"
     ss.anchor_idx += 1
-    if ss.anchor_idx >= len(prompts.ANCHORS):
+    if ss.anchor_idx >= len(ss.q_list):
         finish_session()
 
 
 def render_chat():
     ss = st.session_state
+    n = len(ss.q_list)
     is_followup = ss.awaiting == "followup"
-    question = ss.followup_q if is_followup else prompts.ANCHORS[ss.anchor_idx]
+    question = ss.followup_q if is_followup else ss.q_list[ss.anchor_idx]["ta"]
 
     done_anchors = ss.anchor_idx
-    st.progress(done_anchors / len(prompts.ANCHORS))
+    st.progress(done_anchors / n)
     st.caption(
-        f"Question {min(done_anchors + 1, 9)} of {len(prompts.ANCHORS)}"
+        f"Question {min(done_anchors + 1, n)} of {n}"
         + (" · follow-up 💬" if is_followup else "")
     )
 
-    audio = voice.tts(question)
+    audio = voice.tts(question, speaker=ss.tts_voice)
     if audio:
         st.audio(audio, format="audio/wav")
     st.markdown(f"<div class='rb-q'>🦜 {question}</div>", unsafe_allow_html=True)
     q_gloss = (
         ss.get("followup_gloss") if is_followup
-        else prompts.QUESTION_GLOSSES[ss.anchor_idx]
+        else ss.q_list[ss.anchor_idx]["en"]
     )
     if q_gloss:
         st.markdown(f"<div class='rb-qgloss'>{q_gloss}</div>", unsafe_allow_html=True)
@@ -766,7 +916,7 @@ def main():
         age_label = st.selectbox("Age", list(ages.keys()), index=4)
         mode = st.radio("Mode", [GUIDED, CONVERSATIONAL])
 
-        if ss.phase == "chat":
+        if ss.phase == "chat" and ss.kind == "screen":
             st.info("Session in progress…")
         elif st.button("▶️ Start session", type="primary", disabled=not name.strip()):
             start_session(name.strip(), ages[age_label], mode)
@@ -799,13 +949,7 @@ def main():
         footer()
         return
 
-    if ss.phase == "setup":
-        st.markdown(
-            "Pick a name, an age and a mode in the sidebar, then press "
-            "**Start session**. Redbeak asks 9 friendly questions in Tamil, "
-            "listens, and shows you what the numbers say."
-        )
-    elif ss.phase == "chat":
+    if ss.phase == "chat" and ss.kind == "screen":
         render_chat()
     elif ss.phase == "results" and ss.results:
         render_results(ss.results)
@@ -813,6 +957,12 @@ def main():
             ss.phase = "setup"
             ss.results = None
             st.rerun()
+    else:
+        st.markdown(
+            "Pick a name, an age and a mode in the sidebar, then press "
+            "**Start session**. Redbeak asks 9 friendly questions in Tamil, "
+            "listens, and shows you what the numbers say."
+        )
 
     footer()
 

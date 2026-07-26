@@ -127,6 +127,106 @@ PLAN_SYSTEM = (
     "condition. No text outside the JSON array."
 )
 
+# Practice scenario packs: themed conversational mini-sessions. Each prompt
+# escalates openness — scene-setting first, wide-open retell/lists last.
+SCENARIOS = [
+    {
+        "id": "cat_story",
+        "title_ta": "பூனை கதை",
+        "title_en": "Cat story",
+        "emoji": "🐱",
+        "prompts": [
+            {"ta": "கேளு! ஒரு சின்ன பூனை இருந்துச்சு. அதுக்கு ஒரு சிவப்பு "
+                   "பந்து ரொம்ப புடிக்கும். ஒரு நாள் அந்த பந்து உருண்டு போய் "
+                   "சோஃபா அடியில ஒளிஞ்சுக்கிச்சு. பூனை தேடி தேடி கடைசில "
+                   "கண்டுபிடிச்சுது! கதை முடிஞ்சுது. உனக்கு கதை புடிச்சுதா?",
+             "en": "Listen! There was a little cat. It loved its red ball. "
+                   "One day the ball rolled away and hid under the sofa. The "
+                   "cat searched and searched and finally found it! The end. "
+                   "Did you like the story?"},
+            {"ta": "இப்போ நீ சொல்லு! பூனை கதைய உன் வார்த்தைல நீயே சொல்லு!",
+             "en": "Now you tell it! Tell the cat story in your own words!"},
+            {"ta": "பூனையோட பந்து எங்க போய் ஒளிஞ்சுக்கிச்சு?",
+             "en": "Where did the cat's ball go and hide?"},
+            {"ta": "பூனை பந்த கண்டுபிடிச்சப்போ எப்படி இருந்திருக்கும்? சொல்லு!",
+             "en": "How do you think the cat felt when it found the ball? "
+                   "Tell me!"},
+        ],
+    },
+    {
+        "id": "market_trip",
+        "title_ta": "கடைக்கு போலாம்",
+        "title_en": "Market trip",
+        "emoji": "🛒",
+        "prompts": [
+            {"ta": "கடைக்கு போலாம் வா! நாம என்ன என்ன வாங்கலாம்? சொல்லு!",
+             "en": "Let's go to the shop! What shall we buy? Tell me!"},
+            {"ta": "நீ சொன்னதுல உனக்கு ரொம்ப புடிச்சது எது? அது என்ன கலர்?",
+             "en": "Which of those do you like most? What colour is it?"},
+            {"ta": "கடைக்கு யார் யார் கூட போலாம்? எப்படி போலாம்?",
+             "en": "Who shall we take along to the shop? How shall we go?"},
+            {"ta": "கடைல வேற என்ன என்ன பாக்கலாம்? பெரிய list சொல்லு!",
+             "en": "What else can we see at the shop? Give me a big list!"},
+        ],
+    },
+    {
+        "id": "zoo_day",
+        "title_ta": "விலங்கு தோட்டம்",
+        "title_en": "Zoo day",
+        "emoji": "🦁",
+        "prompts": [
+            {"ta": "இன்னிக்கு விலங்கு தோட்டம் போறோம்! முதல்ல எந்த விலங்கு "
+                   "பாக்கணும்?",
+             "en": "We're going to the zoo today! Which animal shall we see "
+                   "first?"},
+            {"ta": "அந்த விலங்கு என்ன சாப்பிடும்? எப்படி இருக்கும்?",
+             "en": "What does that animal eat? What does it look like?"},
+            {"ta": "யானை எப்படி சத்தம் போடும்? சிங்கம்? நீ சத்தம் பண்ணி "
+                   "சொல்லு!",
+             "en": "What sound does an elephant make? A lion? Make the "
+                   "sounds and tell me!"},
+            {"ta": "தோட்டத்துல இன்னும் என்ன என்ன பாக்கலாம்? சொல்லு!",
+             "en": "What else can we see at the zoo? Tell me!"},
+        ],
+    },
+    {
+        "id": "cooking",
+        "title_ta": "சமையல்",
+        "title_en": "Cooking together",
+        "emoji": "🍳",
+        "prompts": [
+            {"ta": "இன்னிக்கு நாம ரெண்டு பேரும் சேர்ந்து சமைக்கலாம்! என்ன "
+                   "சமைக்கலாம்?",
+             "en": "Today let's cook together, you and me! What shall we "
+                   "make?"},
+            {"ta": "அதுக்கு என்ன என்ன வேணும்? சொல்லு பாப்போம்!",
+             "en": "What do we need for it? Let's list them!"},
+            {"ta": "முதல்ல என்ன பண்ணணும்? அப்புறம் என்ன பண்ணணும்?",
+             "en": "What do we do first? And then what?"},
+            {"ta": "சமைச்சது யாருக்கு யாருக்கு கொடுக்கலாம்? ஏன்?",
+             "en": "Who shall we give our food to? Why?"},
+        ],
+    },
+    {
+        "id": "rainy_day",
+        "title_ta": "மழை நாள்",
+        "title_en": "Rainy day",
+        "emoji": "🌧️",
+        "prompts": [
+            {"ta": "வெளிய மழை பெய்யுது! ஜன்னல்ல பாரு — என்ன என்ன தெரியுது?",
+             "en": "It's raining outside! Look out the window — what can "
+                   "you see?"},
+            {"ta": "மழைல நனைஞ்சா என்ன ஆகும்? உனக்கு நனைய புடிக்குமா?",
+             "en": "What happens if we get wet in the rain? Do you like "
+                   "getting wet?"},
+            {"ta": "மழை நாள்ல வீட்டுக்குள்ள என்ன விளையாடலாம்?",
+             "en": "What can we play indoors on a rainy day?"},
+            {"ta": "மழை நின்னதும் வெளிய போய் என்ன பண்ணலாம்?",
+             "en": "When the rain stops, what shall we do outside?"},
+        ],
+    },
+]
+
 # Typical expressive-language ranges by age band (months), screening-only.
 # mlu: (low, high) words per utterance; longest: minimum longest-utterance
 # length; unique: minimum unique words — applies only when total_words >= 150.
