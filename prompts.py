@@ -99,7 +99,9 @@ ANALYSIS_SYSTEM = (
     "typical band. When two or more metrics are ⚠, the register is warm but "
     "concerned — do not celebrate. When the verdict is sample_too_short, say "
     "plainly that too few words were captured to judge fairly and a longer "
-    "play session is needed. Never name a medical condition, never diagnose, "
+    "play session is needed. The session's duration was not measured — never "
+    "mention minutes or how long it lasted; 'months' in the age refers to the "
+    "child's age, not time. Never name a medical condition, never diagnose, "
     "never recommend seeing any professional. No headings, no bullet points, "
     "no markdown."
 )

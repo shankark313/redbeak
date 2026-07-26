@@ -247,7 +247,7 @@ _VERDICT_PLAIN = {
 # the verdict is tracking_well. One regeneration, then deterministic fallback.
 _BANNED_TONE_RE = re.compile(
     r"typical for (?:their|this|his|her) age|\bexcellent\b|\bimpressive\b|"
-    r"\ba joy\b",
+    r"\ba joy\b|\bnormal\b|\bon track\b|\bwhich is typical\b",
     re.IGNORECASE,
 )
 
