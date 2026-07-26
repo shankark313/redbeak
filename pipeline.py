@@ -108,6 +108,7 @@ def load_practice(name):
 
 
 def save_practice(name, data):
+    data["name"] = name  # practice files are slug-named; keep the real name
     SESSIONS_DIR.mkdir(exist_ok=True)
     practice_path(name).write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"

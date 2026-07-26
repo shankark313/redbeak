@@ -388,10 +388,9 @@ def render_results(session):
 
 # ---------------------------------------------------------- practice & progress
 
-def children_index():
-    """name -> list of saved SCREENING sessions (oldest first), from disk.
-    Practice sessions chart as dots via the practice log, not here."""
-    idx = {}
+def _all_sessions():
+    """Every saved session dict (screening AND practice), filename order."""
+    out = []
     for p in sorted(SESSIONS_DIR.glob("*.json")):
         if p.name.startswith("practice_"):
             continue
@@ -399,9 +398,35 @@ def children_index():
             d = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             continue
-        name = (d.get("child") or "").strip()
-        if name and d.get("metrics") and d.get("kind") != "practice":
-            idx.setdefault(name, []).append(d)
+        if (d.get("child") or "").strip() and d.get("metrics"):
+            out.append(d)
+    return out
+
+
+def children_screened():
+    """name -> SCREENING sessions only (memory delta + trend line)."""
+    idx = {}
+    for d in _all_sessions():
+        if d.get("kind") != "practice":
+            idx.setdefault(d["child"].strip(), []).append(d)
+    return idx
+
+
+def children_all():
+    """name -> sessions of ANY kind; also names that exist only in a
+    practice log. Feeds every child selector."""
+    idx = {}
+    for d in _all_sessions():
+        idx.setdefault(d["child"].strip(), []).append(d)
+    for p in SESSIONS_DIR.glob("practice_*.json"):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        name = (data.get("name")
+                or p.stem[len("practice_"):].replace("_", " ")).strip()
+        if name:
+            idx.setdefault(name, [])
     return idx
 
 
@@ -440,7 +465,7 @@ def scenario_by_id(sid):
 def render_practice():
     """Scenario picker + hands-free practice chat via the live.py engine."""
     ss = st.session_state
-    idx = children_index()
+    idx = children_all()
     if not idx:
         st.info("No saved sessions yet — run a Session first, then practise "
                 "here with themed chats.")
@@ -520,10 +545,11 @@ def render_practice():
         "▶ Start practice chat", type="primary",
         disabled=picked is None or alive,
     ):
-        latest = idx[child][-1]
+        child_sessions = idx.get(child) or []
+        age = child_sessions[-1]["age_months"] if child_sessions else 48
         sid = f"prax_{time.strftime('%Y%m%d_%H%M%S')}_{slug(child)}"
         cmd = [sys.executable, "live.py", "--name", child,
-               "--age", str(latest["age_months"]), "--scenario", picked["id"],
+               "--age", str(age), "--scenario", picked["id"],
                "--practice", "--voice", prac.get("voice", "shubh"),
                "--session-id", sid]
         feed_dir = LIVE_DIR / sid
@@ -543,16 +569,13 @@ def render_practice():
 
 
 def render_progress():
-    idx = children_index()
+    idx = children_all()
     if not idx:
         st.info("No saved sessions yet — after your first session, this page "
                 "shows how the numbers grow over time.")
         return
     child = sidebar_child_picker(idx)
-    sessions = merged_sessions(child, idx[child])
-    if not sessions:
-        st.info("No sessions for this child yet.")
-        return
+    screened = merged_sessions(child, children_screened().get(child, []))
 
     st.subheader(f"Progress — {child}")
     rows = [
@@ -562,7 +585,7 @@ def render_progress():
             "Unique words": s["metrics"]["unique_words"],
             "verdict": s.get("verdict", ""),
         }
-        for s in sessions
+        for s in screened
     ]
     import altair as alt
     import pandas as pd
@@ -574,32 +597,41 @@ def render_progress():
         if e.get("mlu") is not None
     ]
 
-    df_s = pd.DataFrame(rows)
-    c1, c2 = st.columns(2)
-    c1.markdown("**MLU across sessions** · ○ practice chats")
-    mlu_line = (
-        alt.Chart(df_s)
-        .mark_line(point=True, color=ACCENT, strokeWidth=2.5)
-        .encode(x=alt.X("date:N", title=None), y=alt.Y("MLU:Q", title="MLU"))
-    )
-    layers = mlu_line
+    if not rows and not prac_rows:
+        st.info("No sessions for this child yet.")
+        return
+
+    dots = None
     if prac_rows:
         dots = (
             alt.Chart(pd.DataFrame(prac_rows))
             .mark_circle(color="#CBBFB1", size=110, opacity=0.8)
-            .encode(x="date:N", y="MLU:Q")
+            .encode(x=alt.X("date:N", title=None), y=alt.Y("MLU:Q", title="MLU"))
         )
-        layers = mlu_line + dots
-    c1.altair_chart(layers.properties(height=220), width="stretch")
 
-    c2.markdown("**Unique words across sessions**")
-    uniq_line = (
-        alt.Chart(df_s)
-        .mark_line(point=True, color="#5F8D5F", strokeWidth=2.5)
-        .encode(x=alt.X("date:N", title=None),
-                y=alt.Y("Unique words:Q", title="unique words"))
-    )
-    c2.altair_chart(uniq_line.properties(height=220), width="stretch")
+    c1, c2 = st.columns(2)
+    c1.markdown("**MLU across sessions** · ○ practice chats")
+    if rows:
+        df_s = pd.DataFrame(rows)
+        mlu_line = (
+            alt.Chart(df_s)
+            .mark_line(point=True, color=ACCENT, strokeWidth=2.5)
+            .encode(x=alt.X("date:N", title=None), y=alt.Y("MLU:Q", title="MLU"))
+        )
+        layers = mlu_line + dots if dots is not None else mlu_line
+        c1.altair_chart(layers.properties(height=220), width="stretch")
+
+        c2.markdown("**Unique words across sessions**")
+        uniq_line = (
+            alt.Chart(df_s)
+            .mark_line(point=True, color="#5F8D5F", strokeWidth=2.5)
+            .encode(x=alt.X("date:N", title=None),
+                    y=alt.Y("Unique words:Q", title="unique words"))
+        )
+        c2.altair_chart(uniq_line.properties(height=220), width="stretch")
+    else:
+        c1.altair_chart(dots.properties(height=220), width="stretch")
+        c2.caption("no screenings yet — run a Session to start the trend line")
 
     pills = []
     for r in rows:
@@ -609,7 +641,10 @@ def render_progress():
             f"border:1px solid {fg};font-size:0.8rem;padding:0.2rem 0.7rem'>"
             f"{r['date']} · {label}</span>"
         )
-    st.markdown(" ".join(pills), unsafe_allow_html=True)
+    if pills:
+        st.markdown(" ".join(pills), unsafe_allow_html=True)
+    else:
+        st.caption("no screenings yet")
 
     week_ago = date.today() - timedelta(days=6)
     days = {
@@ -622,11 +657,12 @@ def render_progress():
         f"{'s' if len(days) != 1 else ''} this week</div>",
         unsafe_allow_html=True,
     )
-    skills = currently_building(sessions[-1])
-    if skills:
-        st.markdown(f"**Currently building:** {', '.join(skills)}")
-    else:
-        st.markdown("**Currently building:** keep enjoying — all bands met 🎉")
+    if screened:
+        skills = currently_building(screened[-1])
+        if skills:
+            st.markdown(f"**Currently building:** {', '.join(skills)}")
+        else:
+            st.markdown("**Currently building:** keep enjoying — all bands met 🎉")
 
 
 # ------------------------------------------------------------------ live page
@@ -1040,10 +1076,17 @@ def main():
 
         st.divider()
         st.markdown("### Past sessions")
-        saved = sorted(SESSIONS_DIR.glob("*.json"), reverse=True)
+        by_label = {}
+        for child_name, child_sessions in sorted(children_all().items()):
+            for d in reversed(child_sessions):  # newest first per child
+                kind_tag = " · 🧸 practice" if d.get("kind") == "practice" else ""
+                label = f"{child_name} · {d.get('timestamp', '')}{kind_tag}"
+                while label in by_label:
+                    label += " ·"
+                by_label[label] = d
         pick = st.selectbox(
             "Re-render a saved session (no API calls)",
-            ["—"] + [p.stem for p in saved],
+            ["—"] + list(by_label),
         )
 
         st.divider()
@@ -1060,8 +1103,7 @@ def main():
                 st.warning("No a01..a09 audio files found there.")
 
     if pick != "—":
-        data = json.loads((SESSIONS_DIR / f"{pick}.json").read_text(encoding="utf-8"))
-        render_results(data)
+        render_results(by_label[pick])
         footer()
         return
 
