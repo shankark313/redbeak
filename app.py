@@ -25,22 +25,30 @@ from pipeline import (
     transcribe_answer,
 )
 
-st.set_page_config(page_title="Redbeak", page_icon="🦜", layout="wide")
+_ICON = "assets/icon_light_256.png"
+st.set_page_config(
+    page_title="Redbeak",
+    page_icon=_ICON if Path(_ICON).exists() else "🦜",
+    layout="wide",
+)
 
 CREAM = "#FAF8F5"
 INK = "#2E2A26"
-ACCENT = "#9B8B7E"
+ACCENT = "#9B8B7E"        # fills, borders, decorative
+ACCENT_TEXT = "#75655A"   # accent as TEXT — 5.3:1 on cream (AA)
+MUTED = "#6B6258"         # muted text — 5.6:1 on cream (AA)
 
 FOOTER = (
     "Screening prompt, not a diagnosis. "
     "A speech-language pathologist assesses language fully."
 )
 
+# fg tones chosen for >=4.8:1 contrast on their tinted pill backgrounds
 VERDICTS = {
-    "tracking_well": ("Tracking well", "#5F8D5F", "#EAF3EA"),
-    "keep_watching": ("Keep watching", "#B07D2B", "#F8EEDB"),
-    "worth_mentioning": ("Worth mentioning", "#B25E4B", "#F6E4DF"),
-    "sample_too_short": ("Sample too short", "#8A857E", "#EEEBE6"),
+    "tracking_well": ("Tracking well", "#3E6B42", "#EAF3EA"),
+    "keep_watching": ("Keep watching", "#8A5F14", "#F8EEDB"),
+    "worth_mentioning": ("Worth mentioning", "#9C4A36", "#F6E4DF"),
+    "sample_too_short": ("Sample too short", "#6B6258", "#EEEBE6"),
 }
 
 GUIDED = "Guided (standardized)"
@@ -104,55 +112,80 @@ def inject_css():
     st.markdown(
         f"""
         <style>
+        /* projector-friendly base: 17px root, nothing under 1rem */
+        html, body, .stApp {{ font-size: 17px; }}
         .stApp {{ background: {CREAM}; color: {INK}; }}
-        h1, h2, h3, h4, .stMarkdown {{ color: {INK}; }}
+        h1 {{ font-size: 2.4rem !important; font-weight: 700; color: {INK}; }}
+        h2 {{ font-size: 1.8rem !important; color: {INK}; }}
+        h3 {{ font-size: 1.5rem !important; color: {INK}; }}
+        h4 {{ font-size: 1.5rem !important; color: {INK}; }}
+        .stMarkdown {{ color: {INK}; }}
         section[data-testid="stSidebar"] {{
             background: #F3EFE9; border-right: 1px solid #E4DDD3;
+        }}
+        section[data-testid="stSidebar"] label {{ font-weight: 600; }}
+        section[data-testid="stSidebar"] h3 {{ font-size: 1.2rem !important; }}
+        [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{
+            font-size: 1rem !important; color: {MUTED} !important;
+        }}
+        .stButton > button {{
+            padding: 0.6rem 1.3rem; font-size: 1.05rem; border-radius: 10px;
+        }}
+        .stButton > button[kind="primary"] {{
+            background: {ACCENT_TEXT}; border: none; color: #FFFFFF;
+        }}
+        [data-testid="stTable"] td, [data-testid="stTable"] th {{
+            font-size: 1.05rem; padding: 0.55rem 0.8rem;
         }}
         .rb-q {{
             background: #FFFFFF; border: 1px solid #E4DDD3;
             border-left: 5px solid {ACCENT};
-            padding: 0.9rem 1.1rem; border-radius: 12px;
-            font-size: 1.25rem; margin: 0.4rem 0 0.8rem 0;
+            padding: 1rem 1.2rem; border-radius: 14px;
+            font-size: 1.3rem; line-height: 1.5; margin: 0.75rem 0 0.9rem 0;
         }}
         .rb-a {{
-            background: #F1EBE3; padding: 0.7rem 1rem;
-            border-radius: 12px; margin: 0.3rem 0;
+            background: #F1EBE3; padding: 0.9rem 1.1rem;
+            border-radius: 14px; margin: 0.75rem 0 0.3rem 0;
+            font-size: 1.15rem; line-height: 1.5;
         }}
         .rb-gloss {{
-            color: #8A857E; font-style: italic; font-size: 0.95rem;
-            margin: 0.1rem 0 0.6rem 0.4rem;
+            color: {MUTED}; font-style: italic; font-size: 1rem;
+            margin: 0.15rem 0 0.7rem 0.4rem;
         }}
         .rb-qgloss {{
-            color: #8A857E; font-style: italic; font-size: 1rem;
-            margin: -0.4rem 0 0.8rem 0.4rem;
+            color: {MUTED}; font-style: italic; font-size: 1.05rem;
+            margin: -0.3rem 0 0.9rem 0.4rem;
         }}
-        .rb-day b {{ font-size: 0.95rem; }}
+        .rb-day b {{ font-size: 1.05rem; }}
         .rb-day .say {{ margin: 0.4rem 0 0.1rem 0; }}
-        .rb-day .builds {{ color: {ACCENT}; font-size: 0.85rem; margin-top: 0.4rem; }}
+        .rb-day .builds {{ color: {ACCENT_TEXT}; font-size: 1rem; margin-top: 0.4rem; }}
         .rb-card {{
             background: #FFFFFF; border: 1px solid #E4DDD3;
             border-radius: 14px; padding: 1rem 1.2rem; height: 100%;
         }}
-        .rb-card h4 {{ margin: 0 0 0.5rem 0; color: {ACCENT}; }}
+        .rb-card h4 {{
+            margin: 0 0 0.5rem 0; color: {ACCENT_TEXT};
+            font-size: 1.2rem !important;
+        }}
         .rb-metric {{
             background: #FFFFFF; border: 1px solid #E4DDD3;
-            border-radius: 14px; padding: 0.8rem 1rem; text-align: center;
+            border-radius: 14px; padding: 0.9rem 1rem; text-align: center;
         }}
-        .rb-metric .v {{ font-size: 1.7rem; font-weight: 700; }}
-        .rb-metric .l {{ color: #8A857E; font-size: 0.8rem; }}
-        .rb-metric .b {{ color: {ACCENT}; font-size: 0.75rem; }}
+        .rb-metric .v {{ font-size: 2.2rem; font-weight: 700; }}
+        .rb-metric .l {{ color: {MUTED}; font-size: 1rem; }}
+        .rb-metric .b {{ color: {ACCENT_TEXT}; font-size: 1rem; }}
         .rb-pill {{
-            display: inline-block; padding: 0.45rem 1.2rem;
-            border-radius: 999px; font-weight: 700; font-size: 1.05rem;
+            display: inline-block; padding: 0.5rem 1.3rem;
+            border-radius: 999px; font-weight: 700; font-size: 1.1rem;
         }}
         .rb-footer {{
-            color: #8A857E; font-size: 0.85rem; border-top: 1px solid #E4DDD3;
+            color: {MUTED}; font-size: 1rem; border-top: 1px solid #E4DDD3;
             margin-top: 2rem; padding-top: 0.7rem;
         }}
         .rb-memory {{
             background: #EFE9F5; border: 1px solid #DCD2E8;
-            border-radius: 10px; padding: 0.6rem 1rem; margin: 0.6rem 0;
+            border-radius: 10px; padding: 0.7rem 1.1rem; margin: 0.7rem 0;
+            font-size: 1.05rem;
         }}
         </style>
         """,
@@ -162,17 +195,22 @@ def inject_css():
 
 def header():
     cols = st.columns([1, 11])
-    logo = Path("assets/logo.png")
+    logo = next(
+        (p for p in (Path("assets/mark_512.png"), Path("assets/logo.png"))
+         if p.exists()),
+        None,
+    )
     with cols[0]:
-        if logo.exists():
+        if logo:
             st.image(str(logo), width=72)
         else:
             st.markdown("<div style='font-size:3rem'>🦜</div>", unsafe_allow_html=True)
     with cols[1]:
         st.markdown(
             f"<h1 style='margin-bottom:0'>Redbeak</h1>"
-            f"<p style='color:{ACCENT};margin-top:0'>A friendly Tamil chat that "
-            f"listens to how your child talks — ages 2 to 6.</p>",
+            f"<p style='color:{ACCENT_TEXT};margin-top:0;font-size:1.05rem'>"
+            f"A friendly chat that listens to how your child talks — "
+            f"ages 2 to 6.</p>",
             unsafe_allow_html=True,
         )
 
@@ -334,7 +372,7 @@ def render_results(session):
         st.markdown(
             f"<div class='rb-memory'>🧠 Last session MLU "
             f"<b>{mem['prev_mlu']:.2f}</b> → today <b>{m['mlu']:.2f}</b>"
-            f"<span style='color:#8A857E'> · previous session "
+            f"<span style='color:{MUTED}'> · previous session "
             f"{mem['prev_date']}</span></div>",
             unsafe_allow_html=True,
         )
@@ -603,11 +641,11 @@ def render_practice():
         is_today = d == date.today()
         done = d.isoformat() in prac_dates
         style = (
-            f"background:{ACCENT};color:#fff;" if is_today
-            else "background:#EFEBE4;color:#8A857E;"
+            f"background:{ACCENT_TEXT};color:#fff;" if is_today
+            else "background:#EFEBE4;color:#6B6258;"
         )
         chips.append(
-            f"<span class='rb-pill' style='{style}font-size:0.85rem;"
+            f"<span class='rb-pill' style='{style}font-size:1rem;"
             f"padding:0.3rem 0.9rem'>{dname}{' 🔥' if done else ''}</span>"
         )
     st.markdown(" ".join(chips), unsafe_allow_html=True)
@@ -850,7 +888,7 @@ def render_progress():
             "margin-right:0.6rem'>"
             f"<span style='font-size:1.5rem;color:"
             f"{ACCENT if on else '#DDD6CB'}'>●</span><br>"
-            f"<span style='color:#8A857E;font-size:0.75rem'>{dname}</span>"
+            f"<span style='color:{MUTED};font-size:1rem'>{dname}</span>"
             "</span>"
         )
     n_week = sum(
