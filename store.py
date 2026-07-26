@@ -87,6 +87,45 @@ def child_sessions(child_name):
         return []
 
 
+def list_children():
+    """Distinct child names present in Supabase (sessions + practice).
+    [] when unavailable — the app merges these into its local picker."""
+    sb = _sb()
+    if not sb:
+        return []
+    names = set()
+    for table in ("sessions", "practice"):
+        try:
+            res = sb.table(table).select("child_name").execute()
+            names.update(
+                (r.get("child_name") or "").strip()
+                for r in res.data
+            )
+        except Exception:
+            continue
+    return sorted(n for n in names if n)
+
+
+def load_practice_remote(child_name):
+    """The Supabase practice payload for a child, or None."""
+    sb = _sb()
+    if not sb or not child_name:
+        return None
+    try:
+        res = (
+            sb.table("practice")
+            .select("payload")
+            .eq("child_name", child_name)
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            return json.loads(res.data[0]["payload"])
+    except Exception:
+        pass
+    return None
+
+
 def save_practice(child_name, practice):
     """Write-back the practice log/voice choice. No-op without env keys."""
     sb = _sb()

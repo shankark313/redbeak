@@ -463,9 +463,19 @@ def children_screened():
     return idx
 
 
+@st.cache_data(ttl=60)
+def _supabase_children():
+    return store.list_children()
+
+
+@st.cache_data(ttl=30)
+def _remote_practice(child):
+    return store.load_practice_remote(child)
+
+
 def children_all():
     """name -> sessions of ANY kind; also names that exist only in a
-    practice log. Feeds every child selector."""
+    practice log or only in Supabase. Feeds every child selector."""
     idx = {}
     for d in _all_sessions():
         idx.setdefault(d["child"].strip(), []).append(d)
@@ -478,7 +488,31 @@ def children_all():
                 or p.stem[len("practice_"):].replace("_", " ")).strip()
         if name:
             idx.setdefault(name, [])
+    for name in _supabase_children():
+        idx.setdefault(name, [])
     return idx
+
+
+def merged_practice(child):
+    """Local practice file merged with the Supabase practice payload,
+    deduped by date+details — streaks work for seeded data too."""
+    prac = load_practice(child)
+    remote = _remote_practice(child)
+    if remote:
+        for key, fields in (
+            ("sessions", ("date", "scenario_id", "mlu")),
+            ("log", ("date", "day", "activity_name")),
+        ):
+            seen = {tuple(e.get(f) for f in fields) for e in prac.get(key, [])}
+            for e in remote.get(key, []):
+                t = tuple(e.get(f) for f in fields)
+                if t not in seen:
+                    prac.setdefault(key, []).append(e)
+                    seen.add(t)
+        prac["sessions"] = sorted(
+            prac.get("sessions", []), key=lambda e: e.get("date", "")
+        )
+    return prac
 
 
 def merged_sessions(name, disk_sessions):
@@ -624,39 +658,141 @@ def render_practice():
 
 
 
+def _span_text(days):
+    if days < 1.5:
+        return "one day"
+    if days < 14:
+        return f"{int(round(days))} days"
+    weeks = int(round(days / 7))
+    words = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
+             7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+    return f"{words.get(weeks, weeks)} weeks"
+
+
+def _fmt_day(ts):
+    try:
+        return time.strftime("%b %d", time.strptime(ts[:10], "%Y-%m-%d"))
+    except Exception:
+        return ts[:10]
+
+
+CARING_LINE = {
+    "tracking_well": "Keep doing what you're doing — it's working.",
+    "keep_watching": "Growing steadily — the play plan is building exactly "
+    "these muscles.",
+    "worth_mentioning": "Every one of these chats helps. "
+    + analyst.PAED_SENTENCE,
+    "sample_too_short": "A longer, relaxed chat next time will sharpen the "
+    "picture.",
+}
+
+_VERDICT_RANK = {"worth_mentioning": 0, "keep_watching": 1, "tracking_well": 2}
+
+
 def render_progress():
+    """A caring journey view — fully deterministic, zero LLM calls."""
     idx = children_all()
     if not idx:
         st.info("No saved sessions yet — after your first session, this page "
                 "shows how the numbers grow over time.")
         return
     child = sidebar_child_picker(idx)
-    screened = merged_sessions(child, children_screened().get(child, []))
-
-    st.subheader(f"Progress — {child}")
-    rows = [
-        {
-            "date": (s.get("timestamp") or "")[:16],
-            "MLU": s["metrics"]["mlu"],
-            "Unique words": s["metrics"]["unique_words"],
-            "verdict": s.get("verdict", ""),
-        }
-        for s in screened
+    screened = [
+        s for s in merged_sessions(child, children_screened().get(child, []))
+        if s.get("kind") != "practice"
     ]
-    import altair as alt
-    import pandas as pd
-
-    prac = load_practice(child)
+    prac = merged_practice(child)
     prac_rows = [
         {"date": e["date"], "MLU": e["mlu"]}
         for e in prac.get("sessions", [])
         if e.get("mlu") is not None
     ]
-
-    if not rows and not prac_rows:
+    if not screened and not prac_rows:
         st.info("No sessions for this child yet.")
         return
 
+    # 1 — hero line
+    if len(screened) >= 2 and screened[0]["metrics"]["mlu"] > 0:
+        m0 = screened[0]["metrics"]["mlu"]
+        m1 = screened[-1]["metrics"]["mlu"]
+        try:
+            d0 = time.mktime(time.strptime(screened[0]["timestamp"], "%Y-%m-%d %H:%M:%S"))
+            d1 = time.mktime(time.strptime(screened[-1]["timestamp"], "%Y-%m-%d %H:%M:%S"))
+            span = _span_text((d1 - d0) / 86400)
+        except Exception:
+            span = "this journey"
+        pct = round((m1 - m0) / m0 * 100)
+        if pct > 0:
+            hero = f"{child}'s sentences have grown {pct}% in {span} 🌱"
+        elif pct == 0:
+            hero = f"{child}'s sentences are holding steady across {span} 🌱"
+        else:
+            hero = f"{child}'s journey continues — every chat counts 🌱"
+    else:
+        hero = f"{child}'s journey starts here 🌱"
+    st.markdown(
+        f"<h2 style='margin-bottom:0.2rem'>{hero}</h2>", unsafe_allow_html=True
+    )
+
+    # 2 — journey strip: only milestones the data supports
+    miles = []
+    if screened:
+        first = screened[0]
+        miles.append(("🚀", f"The first chat — "
+                      f"{int(first['metrics']['total_words'])} words",
+                      _fmt_day(first.get("timestamp", ""))))
+        best = None
+        for s in screened:
+            rank = _VERDICT_RANK.get(s.get("verdict"))
+            if rank is None:
+                continue
+            if best is not None and rank > best:
+                label = VERDICTS[s["verdict"]][0]
+                miles.append(("🎉", f"Moved to “{label}”",
+                              _fmt_day(s.get("timestamp", ""))))
+                break
+            best = rank if best is None else max(best, rank)
+        rec = max(screened, key=lambda s: s["metrics"]["longest"])
+        if rec["metrics"]["longest"] >= 2:
+            miles.append(("🏆", f"Longest sentence yet: "
+                          f"{int(rec['metrics']['longest'])} words",
+                          _fmt_day(rec.get("timestamp", ""))))
+        vrec = max(screened, key=lambda s: s["metrics"]["unique_words"])
+        if vrec["metrics"]["unique_words"] >= 10:
+            miles.append(("📚", f"{int(vrec['metrics']['unique_words'])} "
+                          "different words in one chat",
+                          _fmt_day(vrec.get("timestamp", ""))))
+    if miles:
+        cols = st.columns(len(miles))
+        for col, (emoji, text, when) in zip(cols, miles):
+            col.markdown(
+                f"<div class='rb-card' style='text-align:center'>"
+                f"<div style='font-size:1.6rem'>{emoji}</div>{text}"
+                f"<div class='rb-gloss' style='margin:0.2rem 0 0 0'>{when}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    # 3 — charts with the typical band shaded
+    import altair as alt
+    import pandas as pd
+
+    age = screened[-1]["age_months"] if screened else 48
+    band = analyst.band_for(age)
+    lo, hi = band["mlu"]
+    rows = [
+        {
+            "date": (s.get("timestamp") or "")[:16],
+            "MLU": s["metrics"]["mlu"],
+            "Unique words": s["metrics"]["unique_words"],
+        }
+        for s in screened
+    ]
+    shade = (
+        alt.Chart(pd.DataFrame({"y0": [lo], "y1": [hi]}))
+        .mark_rect(color="#B9CDB9", opacity=0.35)
+        .encode(y="y0:Q", y2="y1:Q")
+    )
     dots = None
     if prac_rows:
         dots = (
@@ -664,61 +800,81 @@ def render_progress():
             .mark_circle(color="#CBBFB1", size=110, opacity=0.8)
             .encode(x=alt.X("date:N", title=None), y=alt.Y("MLU:Q", title="MLU"))
         )
-
     c1, c2 = st.columns(2)
-    c1.markdown("**MLU across sessions** · ○ practice chats")
+    c1.markdown(f"**MLU** · shaded = typical band ({lo}–{hi}) · ○ practice")
+    layers = [shade]
     if rows:
         df_s = pd.DataFrame(rows)
-        mlu_line = (
+        layers.append(
             alt.Chart(df_s)
             .mark_line(point=True, color=ACCENT, strokeWidth=2.5)
             .encode(x=alt.X("date:N", title=None), y=alt.Y("MLU:Q", title="MLU"))
         )
-        layers = mlu_line + dots if dots is not None else mlu_line
-        c1.altair_chart(layers.properties(height=220), width="stretch")
+    if dots is not None:
+        layers.append(dots)
+    chart = layers[0]
+    for extra in layers[1:]:
+        chart = chart + extra
+    c1.altair_chart(chart.properties(height=230), width="stretch")
 
-        c2.markdown("**Unique words across sessions**")
-        uniq_line = (
-            alt.Chart(df_s)
+    c2.markdown(f"**Unique words** · dashed = typical ≥ {band['unique']} "
+                "(150+ word chats)")
+    if rows:
+        rule = (
+            alt.Chart(pd.DataFrame({"y": [band["unique"]]}))
+            .mark_rule(strokeDash=[6, 4], color="#5F8D5F")
+            .encode(y="y:Q")
+        )
+        uniq = (
+            alt.Chart(pd.DataFrame(rows))
             .mark_line(point=True, color="#5F8D5F", strokeWidth=2.5)
             .encode(x=alt.X("date:N", title=None),
                     y=alt.Y("Unique words:Q", title="unique words"))
         )
-        c2.altair_chart(uniq_line.properties(height=220), width="stretch")
+        c2.altair_chart((rule + uniq).properties(height=230), width="stretch")
     else:
-        c1.altair_chart(dots.properties(height=220), width="stretch")
         c2.caption("no screenings yet — run a Session to start the trend line")
 
-    pills = []
-    for r in rows:
-        label, fg, bg = VERDICTS.get(r["verdict"], VERDICTS["sample_too_short"])
-        pills.append(
-            f"<span class='rb-pill' style='color:{fg};background:{bg};"
-            f"border:1px solid {fg};font-size:0.8rem;padding:0.2rem 0.7rem'>"
-            f"{r['date']} · {label}</span>"
-        )
-    if pills:
-        st.markdown(" ".join(pills), unsafe_allow_html=True)
-    else:
-        st.caption("no screenings yet")
-
-    week_ago = date.today() - timedelta(days=6)
-    days = {
-        e["date"]
-        for e in prac.get("log", []) + prac.get("sessions", [])
-        if e.get("date", "") >= week_ago.isoformat()
+    # 4 — practice week: Mon–Sun dot strip + streak
+    monday = date.today() - timedelta(days=date.today().weekday())
+    practiced = {
+        e.get("date")
+        for e in prac.get("sessions", []) + prac.get("log", [])
     }
+    chips = []
+    for i, dname in enumerate(("M", "T", "W", "T", "F", "S", "S")):
+        d = (monday + timedelta(days=i)).isoformat()
+        on = d in practiced
+        chips.append(
+            "<span style='display:inline-block;text-align:center;"
+            "margin-right:0.6rem'>"
+            f"<span style='font-size:1.5rem;color:"
+            f"{ACCENT if on else '#DDD6CB'}'>●</span><br>"
+            f"<span style='color:#8A857E;font-size:0.75rem'>{dname}</span>"
+            "</span>"
+        )
+    n_week = sum(
+        1 for i in range(7)
+        if (monday + timedelta(days=i)).isoformat() in practiced
+    )
+    streak_txt = (
+        f"<b>{n_week}</b> practice day{'s' if n_week != 1 else ''} this week 🔥"
+        if n_week
+        else "No practice chats yet this week — today's a lovely day to start"
+    )
     st.markdown(
-        f"<div class='rb-memory'>🔥 <b>{len(days)}</b> practice day"
-        f"{'s' if len(days) != 1 else ''} this week</div>",
+        f"<div class='rb-memory'>{''.join(chips)}"
+        f"<span style='margin-left:0.8rem'>{streak_txt}</span></div>",
         unsafe_allow_html=True,
     )
+
+    # 5 — one caring line, verdict-aware, deterministic
     if screened:
-        skills = currently_building(screened[-1])
-        if skills:
-            st.markdown(f"**Currently building:** {', '.join(skills)}")
-        else:
-            st.markdown("**Currently building:** keep enjoying — all bands met 🎉")
+        line = CARING_LINE.get(screened[-1].get("verdict"))
+        if line:
+            st.markdown(f"💛 {line}")
+    else:
+        st.caption("no screenings yet")
 
 
 # ------------------------------------------------------------------ live page
