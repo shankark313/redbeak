@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+sessions/
+audio_cache/
+.env
+.streamlit/
+testdata/

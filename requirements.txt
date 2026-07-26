@@ -1,0 +1,4 @@
+streamlit>=1.60
+sarvamai>=0.1.28
+supabase>=2.31
+httpx>=0.28
