@@ -131,10 +131,12 @@ streamlit run app.py
 Hands-free, from the terminal:
 
 ```bash
-python live.py --name Sthira --age 60                     # screening chat
-python live.py --name Sthira --age 60 --scenario cat_story --practice
-python live.py --name Sthira --age 60 --lang hi-IN
+python live.py --name <child-name> --age <months>                          # screening chat
+python live.py --name <child-name> --age <months> --scenario cat_story --practice
+python live.py --name <child-name> --age <months> --lang hi-IN
 ```
+
+`--age` is in months (24–72 supported).
 
 Sessions auto-save to `sessions/` as JSON plus per-turn audio. The sidebar
 re-renders any past session with zero API calls, or batch-runs a folder of
