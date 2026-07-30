@@ -136,12 +136,6 @@ re-renders any past session with zero API calls, or batch-runs a folder of
 | `prompts.py` | Anchor questions, scenarios, system prompts, age-band norms |
 | `store.py` | Supabase read/write — no-op when unset |
 
-## Demo
-
-https://share.descript.com/view/OtgmZtY4enu
-
 ## Status
 
 Built in one day at the Sarvam Epoch Buildathon (26 Jul 2026), Bengaluru.
-Shipping inside Family OS ([getfamilyos.com](https://getfamilyos.com)) later
-this year.
