@@ -87,6 +87,20 @@ become they/them. A register lock bans "excellent", "normal", "on track" and
 friends unless the verdict is `tracking_well`, with one regeneration and then
 a deterministic fallback. None of this depends on the model complying.
 
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| STT | Sarvam Saaras v3 — codemix mode, language-pinned (ta-IN / hi-IN) |
+| LLM | Sarvam-30B — follow-ups, segmentation, family-facing text (reasoning_effort=None) |
+| TTS | Sarvam Bulbul v3 — sentence-split with stitched pauses, pace 0.75 |
+| Translation | sarvam-translate v1 — English glosses |
+| Voice loop | Python + sounddevice — ambient-calibrated silence detection, self-ending sessions |
+| Analysis | Python — deterministic metrics vs published age norms, guardrails in code; segmentation is LLM-assisted but never rewrites a word |
+| UI | Streamlit — 4 pages (Session / Live / Practice / Progress) |
+| Records | Supabase (Postgres) — sessions, practice log, cross-session memory; optional, no-ops without keys and the app runs from local disk |
+| Language packs | prompts.py — anchors, scenarios, follow-up styles per language; Hindi was mostly one new pack |
+
 ## Honest limits
 
 Expressive language only — not articulation, comprehension, pragmatics or
